@@ -1,0 +1,32 @@
+# AI Home Sentinel - Python dependencies
+#
+# We deliberately keep this small so setup stays fast and reliable on a
+# Raspberry Pi. Heavier packages (Ultralytics YOLO, face recognition) are
+# added in later phases.
+
+PyYAML>=6.0           # reads the config.yaml settings file
+Flask>=3.0            # runs the web dashboard, /status API, and /video stream
+psutil>=5.9           # reads CPU, memory, disk, and temperature info
+
+# Phase 2 - camera and live video.
+numpy>=1.24           # image frames are numpy arrays
+opencv-python>=4.8    # USB-webcam capture (VideoCapture) + JPEG encoding
+                      # On a Raspberry Pi this installs from piwheels and can
+                      # take a few minutes. If it ever fails, you can instead
+                      # run: sudo apt install -y python3-opencv
+
+# IMPORTANT - the Raspberry Pi camera module (Picamera2) is NOT listed here on
+# purpose. It is not reliably pip-installable. On Raspberry Pi OS you install it
+# as a system package and let the venv see it:
+#
+#     sudo apt update && sudo apt install -y python3-picamera2
+#     # then recreate the venv so it can see system packages:
+#     deactivate
+#     rm -rf venv
+#     python3 -m venv --system-site-packages venv
+#     source venv/bin/activate
+#     pip install -r requirements.txt
+#
+# The full step-by-step is in the README ("Phase 2"). If Picamera2 is missing,
+# the app still runs and falls back to a USB camera (or shows "camera
+# unavailable") instead of crashing.

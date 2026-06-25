@@ -1,0 +1,154 @@
+/* AI Home Sentinel - status page styling (Phase 1).
+   Kept simple and readable. Dark, easy-on-the-eyes color scheme. */
+
+:root {
+  --bg: #0f1419;
+  --card: #1b232c;
+  --text: #e6edf3;
+  --muted: #8b98a5;
+  --accent: #4cc2ff;
+  --ok: #2ecc71;
+  --warn: #f1c40f;
+  --bad: #e74c3c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+header {
+  padding: 1.5rem;
+  text-align: center;
+  border-bottom: 1px solid #2a3540;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+  color: var(--accent);
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+main {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid #2a3540;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: #2a3540;
+  color: var(--text);
+}
+
+.badge-ok {
+  background: var(--ok);
+  color: #04210f;
+}
+
+.badge-warn {
+  background: var(--warn);
+  color: #2a2300;
+}
+
+.badge-bad {
+  background: var(--bad);
+  color: #2a0000;
+}
+
+.badge-unknown {
+  background: #2a3540;
+  color: var(--muted);
+}
+
+/* The Live View spans the full width so the picture is large and clear. */
+.live-card {
+  grid-column: 1 / -1;
+}
+
+.video-wrap {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-message {
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.status-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.status-list li {
+  margin: 0.25rem 0;
+}
+
+.error-card {
+  grid-column: 1 / -1;
+  border-color: var(--bad);
+}
+
+.error-card h2 {
+  color: var(--bad);
+}
+
+.hidden {
+  display: none;
+}
+
+footer {
+  text-align: center;
+  padding: 1rem;
+}
