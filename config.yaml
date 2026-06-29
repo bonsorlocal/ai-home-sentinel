@@ -1,0 +1,78 @@
+# AI Home Sentinel configuration file.
+#
+# This single file controls how the whole system behaves. You can change
+# values here without editing any Python code. Lines starting with "#" are
+# comments and are ignored by the program.
+#
+# In Phase 1 only the "dashboard" and "performance" sections are actually
+# used (for the status page). The other sections are filled in now so later
+# phases (camera, motion, detection, faces) work without changing structure.
+
+camera:
+  type: "auto"          # "auto", "picamera2" (Pi camera), or "opencv" (USB cam)
+  width: 1280           # full resolution width for the live view
+  height: 720           # full resolution height for the live view
+  ai_width: 640         # smaller width used for AI (keeps it fast)
+  ai_height: 360        # smaller height used for AI
+  target_fps: 20        # how many frames per second to aim for
+
+motion:
+  enabled: true
+  min_area: 1200                 # ignore tiny movements smaller than this
+  cooldown_seconds: 5            # wait this long before logging another motion event
+  background_learning_rate: 0.02 # how quickly the "still background" updates
+
+detector:
+  enabled: true
+  backend: "ultralytics"             # AI backend; later: "ncnn" or "openvino"
+  model_path: "models/yolo_nano.pt"  # path to the YOLO model file
+  confidence: 0.45                   # minimum confidence to count a detection
+  run_every_n_seconds: 1.0           # run detection at most this often
+  classes:                           # only look for these object types
+    - person
+    - dog
+    - cat
+    - car
+    - bicycle
+    - backpack
+    - suitcase
+
+face_recognition:
+  enabled: false                                   # off by default (Phase 5)
+  known_faces_dir: "data/known_faces"
+  unknown_faces_dir: "data/events/unknown_faces"
+  tolerance: 0.5                                   # lower = stricter match
+  run_only_when_person_detected: true
+
+storage:
+  event_dir: "data/events"
+  snapshot_dir: "data/events/snapshots"
+  database_path: "data/sentinel.db"
+  max_snapshots_per_day: 500
+  save_snapshot_on_motion: true
+  save_snapshot_on_person: true
+
+dashboard:
+  host: "0.0.0.0"        # 0.0.0.0 = reachable from other devices on your LAN
+  port: 5000             # open http://<pi-ip>:5000 in a browser
+  require_token: false   # set true later to require a token to view
+  token: ""              # the secret token (leave empty while require_token is false)
+
+brain:                   # B1 "language brain" (Grok cloud) - chat + daily recap
+  enabled: true          # set false to fully disable the brain
+  base_url: "https://api.x.ai/v1"   # xAI Grok API (OpenAI-compatible)
+  fast_model: "grok-4.3"            # quick everyday questions
+  smart_model: "grok-4.3"           # the "summarize my day" recap
+  fast_reasoning_effort: ""         # "", "low", "medium", or "high" ("" = omit)
+  smart_reasoning_effort: ""        # leave "" for fast, cheap answers
+  daily_call_cap: 50                # safety cap; brain declines after this many calls/day
+  request_timeout_seconds: 30       # give up on a Grok call after this long
+  max_events_in_context: 40         # how many recent events to feed the model
+  max_answer_tokens: 500            # keep answers short (and cheap)
+  secrets_file: "secrets.yaml"      # where the Grok key lives (git-ignored)
+
+performance:
+  ai_queue_size: 1               # keep only the newest AI frame
+  drop_old_frames: true          # throw away stale frames so AI stays fresh
+  log_fps_every_seconds: 10      # how often to log FPS to the console
+  max_cpu_temp_celsius: 75       # warn when the Pi gets hotter than this

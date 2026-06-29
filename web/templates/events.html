@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Home Sentinel - Events</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <header>
+      <h1>AI Home Sentinel</h1>
+      <p class="subtitle">Event Ledger</p>
+    </header>
+
+    <main class="events-main">
+      <section class="card">
+        <h2>Recent events</h2>
+        <p class="muted">
+          <a href="/">Back to dashboard</a>
+          &nbsp;|&nbsp;
+          <span id="event-count">Loading...</span>
+        </p>
+        <ul id="event-list" class="event-list">
+          <li class="muted">Loading events...</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p class="muted">Data stays on this device. Tier 1 = observation; Tier 2 = alert.</p>
+    </footer>
+
+    <script>
+      (function () {
+        "use strict";
+
+        function tierBadge(tier) {
+          if (tier === 2) return '<span class="badge badge-bad tier2-badge">&#9888; ALERT</span>';
+          return '<span class="badge badge-ok">Tier 1</span>';
+        }
+
+        function importanceBar(imp) {
+          var pct = Math.round((imp || 0) * 100);
+          var color = imp >= 0.7 ? "var(--bad)" : imp >= 0.5 ? "var(--warn)" : "var(--ok)";
+          return (
+            '<span class="imp-bar" title="importance ' + pct + '%">' +
+            '<span class="imp-fill" style="width:' + pct + '%;background:' + color + '"></span>' +
+            '</span>'
+          );
+        }
+
+        function render(data) {
+          var list = document.getElementById("event-list");
+          var countEl = document.getElementById("event-count");
+          var tier2count = (data.events || []).filter(function(e){ return e.tier === 2; }).length;
+          countEl.textContent = data.count + " total events" +
+            (tier2count > 0 ? " \u2014 " + tier2count + " alerts" : "");
+
+          if (!data.events || data.events.length === 0) {
+            list.innerHTML = '<li class="muted">No events recorded yet. Wave at the camera!</li>';
+            return;
+          }
+
+          list.innerHTML = data.events
+            .map(function (ev) {
+              var snap = ev.snapshot_path
+                ? '<br><span class="muted">Snapshot saved</span>'
+                : "";
+              var alertClass = ev.tier === 2 ? " event-alert" : "";
+              return (
+                '<li class="event-item' + alertClass + '">' +
+                '<div class="event-header">' +
+                tierBadge(ev.tier) +
+                importanceBar(ev.importance) +
+                ' <strong>' + ev.title + '</strong>' +
+                ' <span class="muted">(' + ev.source + ')</span>' +
+                "</div>" +
+                '<div class="event-meta muted">' + ev.timestamp + "</div>" +
+                '<div class="event-summary">' + (ev.summary || "") + snap + "</div>" +
+                "</li>"
+              );
+            })
+            .join("");
+        }
+
+        function refresh() {
+          fetch("/api/events", { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(render)
+            .catch(function () {
+              document.getElementById("event-list").innerHTML =
+                '<li class="muted">Could not load events.</li>';
+            });
+        }
+
+        refresh();
+        setInterval(refresh, 5000);
+      })();
+    </script>
+  </body>
+</html>

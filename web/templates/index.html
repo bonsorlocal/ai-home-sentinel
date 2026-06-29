@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<!--
+  AI Home Sentinel - status page (Phase 2).
+  This page asks the server for /status every few seconds and shows the
+  results. It also displays the live camera view streamed from /video.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Home Sentinel - Live View</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <header>
+      <h1>AI Home Sentinel</h1>
+      <p class="subtitle" id="page-subtitle">Loading...</p>
+    </header>
+
+    <main>
+      <section class="card live-card" id="live-card">
+        <h2>Live View</h2>
+        <div class="video-wrap">
+          <!-- The browser swaps in each new frame from the MJPEG stream.
+               app.js sets the src only when the camera is active. -->
+          <img id="video" class="hidden" alt="Live camera view" />
+          <p id="video-message" class="muted video-message">
+            Looking for a camera...
+          </p>
+        </div>
+      </section>
+
+      <section class="card brain-card" id="brain-card">
+        <h2>Ask the Sentinel</h2>
+        <p class="muted" id="brain-state">Checking the brain...</p>
+        <div class="chat-output" id="chat-output">
+          <p class="muted">
+            Ask things like "What happened today?" or "Did anyone come to the
+            door?" - answers use your recent events.
+          </p>
+        </div>
+        <form class="chat-form" id="chat-form" autocomplete="off">
+          <input
+            type="text"
+            id="chat-input"
+            class="chat-input"
+            placeholder="Ask a question about what the camera saw..."
+            aria-label="Ask a question"
+          />
+          <button type="submit" id="chat-send" class="btn">Ask</button>
+        </form>
+        <button type="button" id="summary-btn" class="btn btn-secondary">
+          Summarize my day
+        </button>
+      </section>
+
+      <section class="card" id="connection-card">
+        <h2>Connection</h2>
+        <p>
+          Status:
+          <span id="connection" class="badge badge-unknown">connecting...</span>
+        </p>
+        <p class="muted">Last updated: <span id="timestamp">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>Temperature</h2>
+        <p>
+          CPU temperature:
+          <strong id="temp">-</strong>
+          <span id="temp-warning" class="badge badge-warn hidden">TOO HOT</span>
+        </p>
+        <p class="muted">Source: <span id="temp-source">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>CPU &amp; Memory</h2>
+        <p>CPU usage: <strong id="cpu">-</strong></p>
+        <p>RAM usage: <strong id="ram">-</strong></p>
+      </section>
+
+      <section class="card">
+        <h2>Disk</h2>
+        <p>Disk usage: <strong id="disk">-</strong></p>
+      </section>
+
+      <section class="card">
+        <h2>Throttling (Raspberry Pi)</h2>
+        <p id="throttle">-</p>
+      </section>
+
+      <section class="card">
+        <h2>System status</h2>
+        <ul class="status-list">
+          <li>Camera: <span id="camera-active" class="badge">off</span></li>
+          <li>Motion: <span id="motion-active" class="badge">off</span></li>
+          <li>Detector: <span id="detector-active" class="badge">off</span></li>
+          <li>Brain: <span id="brain-active" class="badge">off</span></li>
+          <li>Reasoner: <span id="reasoner-active" class="badge">off</span></li>
+          <li>Events: <a href="/events" id="event-link">view log</a> (<span id="event-count">0</span>)</li>
+        </ul>
+        <p class="muted" id="camera-detail">-</p>
+      </section>
+
+      <section class="card error-card hidden" id="error-card">
+        <h2>Error</h2>
+        <p id="error-message"></p>
+      </section>
+    </main>
+
+    <footer>
+      <p class="muted">
+        This dashboard is for your local network only. Data stays on this
+        device.
+      </p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
