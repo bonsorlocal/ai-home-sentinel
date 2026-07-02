@@ -9,25 +9,55 @@
 # phases (camera, motion, detection, faces) work without changing structure.
 
 camera:
-  type: "auto"          # "auto", "picamera2" (Pi camera), or "opencv" (USB cam)
-  width: 1280           # full resolution width for the live view
-  height: 720           # full resolution height for the live view
-  ai_width: 640         # smaller width used for AI (keeps it fast)
-  ai_height: 360        # smaller height used for AI
-  target_fps: 20        # how many frames per second to aim for
+  type: "picamera2"     # Pi camera only (no USB/opencv fallback)
+  width: 1280           # full capture for AI + tier-2 snapshots
+  height: 720
+  ai_width: 640
+  ai_height: 360
+  target_fps: 20        # raw capture rate for motion / YOLO
+  # Live browser stream only — smaller + slower than capture to keep the Pi smooth
+  stream_width: 640
+  stream_height: 360
+  stream_fps: 10
+  stream_jpeg_quality: 55
 
 motion:
   enabled: true
-  min_area: 1200                 # ignore tiny movements smaller than this
-  cooldown_seconds: 5            # wait this long before logging another motion event
-  background_learning_rate: 0.02 # how quickly the "still background" updates
+  min_area: 1200
+  start_min_area: 1200          # threshold to start a new motion session
+  start_consecutive_frames: 2   # require N consecutive motion frames to start
+  candidate_window_seconds: 1.5 # debounce candidate before activation
+  end_still_seconds: 3.0        # stillness required before session can end
+  end_grace_seconds: 2.0        # extra grace so brief pauses don't cut clips
+  min_session_seconds: 4.0      # keep session open at least this long
+  max_event_seconds: 90.0       # hard cap so one incident always closes
+  session_update_every_seconds: 1.0
+  person_missing_seconds: 10.0  # end when person absent for this long
+  person_still_seconds: 15.0    # end when person stays still this long
+  person_presence_stale_seconds: 4.0
+  person_still_bbox_quiet_seconds: 2.0
+  still_bbox_center_drift_px: 25.0
+  still_bbox_area_change_ratio: 0.2
+  still_motion_area_ratio: 0.35
+  global_motion_ratio_max: 0.65 # suppress global brightness/flicker motion
+  max_noise_contours: 20        # suppress many tiny contour storms
+  brightness_jump_threshold: 38.0
+  cooldown_seconds: 30   # log motion at most once per 30s (ledger only, no snapshot)
+  background_learning_rate: 0.02
+
+dedupe:                  # reduce repeated near-identical log spam
+  enabled: true
+  motion_window_seconds: 300   # 5-minute similarity window
+  motion_area_tolerance: 0.75  # +/-75% area considered similar (moderate)
+  object_window_seconds: 120   # one "person present" log per 2 minutes (tier 1)
+  face_window_seconds: 120     # one face log per name per 2 minutes (tier 1)
 
 detector:
   enabled: true
   backend: "ultralytics"             # AI backend; later: "ncnn" or "openvino"
   model_path: "models/yolo_nano.pt"  # path to the YOLO model file
   confidence: 0.45                   # minimum confidence to count a detection
-  run_every_n_seconds: 1.0           # run detection at most this often
+  run_every_n_seconds: 2.0           # run detection at most this often
   classes:                           # only look for these object types
     - person
     - dog
@@ -38,7 +68,7 @@ detector:
     - suitcase
 
 face_recognition:
-  enabled: false                                   # off by default (Phase 5)
+  enabled: true                                    # Phase 5 enabled
   known_faces_dir: "data/known_faces"
   unknown_faces_dir: "data/events/unknown_faces"
   tolerance: 0.5                                   # lower = stricter match
@@ -48,15 +78,62 @@ storage:
   event_dir: "data/events"
   snapshot_dir: "data/events/snapshots"
   database_path: "data/sentinel.db"
-  max_snapshots_per_day: 500
-  save_snapshot_on_motion: true
-  save_snapshot_on_person: true
+  max_snapshots_per_day: 200
+  save_snapshot_on_motion: false     # motion stays in the event log only
+  save_snapshot_on_person: false     # person snapshots only when tier 2
+  save_snapshot_on_tier2: true       # night / repeat / unknown-face alerts
+
+clips:                   # Phase 8 - save short motion clips (Ring-style)
+  enabled: true          # enabled for Phase 8 validation
+  clip_dir: "data/events/clips"
+  save_on_motion: true     # attach clip to motion events
+  save_on_detection: true  # attach clip when a person is seen or tier-2 alert
+  min_seconds_between_clips: 15   # avoid filling the disk during busy periods
+  prefer_h264: true        # browser-playable MP4 (uses ffmpeg on the Pi when available)
+  pre_roll_seconds: 3
+  post_roll_seconds: 5
+  record_fps: 10
+  record_width: 640
+  record_height: 360
+  max_session_seconds: 90
+  min_session_seconds_for_clip: 8   # skip short motion-only noise bursts
+  max_duration_seconds: 60
+  max_clips_per_day: 100
+  prune_when_full: true    # drop oldest clip today when daily cap is hit
+
+dvr:                     # Phase 9 - always-on local USB recording
+  enabled: true
+  storage_root: "/media/sentinel-dvr"  # USB mount point (required; no SD fallback)
+  retention_hours: 48
+  segment_seconds: 60
+  record_fps: 10
+  record_width: 640
+  record_height: 360
+  prefer_h264: true
+  max_query_segments: 12
+  max_analysis_segments_per_query: 2
 
 dashboard:
   host: "0.0.0.0"        # 0.0.0.0 = reachable from other devices on your LAN
   port: 5000             # open http://<pi-ip>:5000 in a browser
   require_token: false   # set true later to require a token to view
   token: ""              # the secret token (leave empty while require_token is false)
+
+voice:                   # spoken replies in the dashboard (Web Speech API in browser)
+  enabled: true          # speak answers aloud (set false for text-only)
+  speak_text_queries: false   # also speak when you type instead of using the mic
+  wake_word_enabled: false    # future: always-on "hey sentinel" (not implemented yet)
+  wake_word: "hey sentinel"
+  language: "en-US"      # speech recognition + voice language
+
+notifications:           # Phase 7b - phone push alerts for tier-2 events
+  enabled: false         # set true after configuring topic below
+  provider: "ntfy"         # ntfy.sh (free HTTP push; subscribe on your phone)
+  topic: ""                # e.g. "my-home-sentinel-abc123" (pick a unique name)
+  cooldown_seconds: 60     # minimum seconds between pushes
+  notify_on_tier: 2        # send when reasoner promotes to this tier or higher
+  request_timeout_seconds: 10
+  secrets_file: "secrets.yaml"   # optional ntfy_auth_token for private topics
 
 brain:                   # B1 "language brain" (Grok cloud) - chat + daily recap
   enabled: true          # set false to fully disable the brain
@@ -69,7 +146,25 @@ brain:                   # B1 "language brain" (Grok cloud) - chat + daily recap
   request_timeout_seconds: 30       # give up on a Grok call after this long
   max_events_in_context: 40         # how many recent events to feed the model
   max_answer_tokens: 500            # keep answers short (and cheap)
+  include_clip_metadata_in_context: true
+  live_vision_enabled: true         # attach live camera frame for present-tense questions
+  vision_model: "grok-4.3"          # model used when a live frame is attached
+  live_jpeg_quality: 70
+  live_max_width: 640
+  dvr_max_segments_per_query: 8
+  dvr_max_analysis_segments: 2
+  dvr_timeout_budget_seconds: 35
   secrets_file: "secrets.yaml"      # where the Grok key lives (git-ignored)
+
+video_metadata:          # Phase 8 priority - cloud clip summaries for voice queries
+  enabled: true          # enabled for Phase 8 validation
+  provider: "grok"
+  base_url: "https://api.x.ai/v1"
+  model: "grok-4.3"
+  max_keyframes: 3
+  daily_call_cap: 30
+  request_timeout_seconds: 20
+  secrets_file: "secrets.yaml"
 
 performance:
   ai_queue_size: 1               # keep only the newest AI frame

@@ -118,3 +118,13 @@ def test_count(tmp_path):
     assert ledger.count() == 0
     ledger.insert(source="system", title="Startup")
     assert ledger.count() == 1
+
+
+def test_update_entities(tmp_path):
+    ledger = EventLedger(str(tmp_path / "test.db"))
+    record = ledger.insert(source="system", title="Booted", entities={"x": 1})
+    ok = ledger.update_entities(record.id, {"clip_analysis_status": "ok"})
+    assert ok is True
+    updated = ledger.get_by_id(record.id)
+    assert updated is not None
+    assert updated.entities.get("clip_analysis_status") == "ok"

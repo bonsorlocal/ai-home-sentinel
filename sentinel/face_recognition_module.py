@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sentinel.config import Config
@@ -116,6 +117,11 @@ class FaceRecognizer:
             "active": self.is_active(),
             "enabled": self._enabled,
             "known_faces": len(self._known_names),
+            "last_run_seconds_ago": (
+                None
+                if self._last_run_at <= 0.0
+                else round(max(0.0, time.monotonic() - self._last_run_at), 2)
+            ),
             "message": self._message,
         }
 
@@ -226,8 +232,6 @@ class FaceRecognizer:
         return results
 
     def _run(self) -> None:
-        import time
-
         while not self._stop_event.is_set():
             self._stop_event.wait(0.5)
             if not self._motion.is_active():

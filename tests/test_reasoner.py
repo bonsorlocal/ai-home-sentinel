@@ -186,9 +186,10 @@ class TestPersonClassification:
         )
         assert tier == 1
 
-    def test_person_after_motion_is_tier2(self, reasoner: Reasoner) -> None:
+    def test_person_after_motion_stays_tier1(self, reasoner: Reasoner) -> None:
+        """Motion context alone should not trigger an alert (avoids Ring-style spam)."""
         ts = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
-        motion_ts = ts - timedelta(seconds=30)  # 30 s before
+        motion_ts = ts - timedelta(seconds=30)
         recent = [_motion_event(motion_ts)]
         tier, imp = reasoner.classify(
             "object",
@@ -196,8 +197,8 @@ class TestPersonClassification:
             recent,
             ts=ts,
         )
-        assert tier == 2
-        assert imp == pytest.approx(0.65)
+        assert tier == 1
+        assert imp == pytest.approx(0.40)
 
     def test_stale_motion_does_not_promote(self, reasoner: Reasoner) -> None:
         ts = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)

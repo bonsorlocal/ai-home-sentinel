@@ -18,7 +18,6 @@ Tier promotion rules (first matching rule wins, highest priority first):
   P1  Unknown face detected                              -> tier 2, imp 0.75
   P2  >=N person detections within W minutes             -> tier 2, imp 0.80
   P3  Person detected during night hours (22:00-05:59)   -> tier 2, imp 0.70
-  P4  Person detected < 90 s after a motion event        -> tier 2, imp 0.65
 
 Default fallback (no rule fires):
   object - person                                        -> tier 1, imp 0.40
@@ -146,10 +145,6 @@ class Reasoner:
                 # P3 - nighttime person
                 if self._is_night(ts):
                     return 2, 0.70
-
-                # P4 - motion preceded this detection
-                if self._recent_motion(recent, ts):
-                    return 2, 0.65
 
                 return 1, 0.40
 

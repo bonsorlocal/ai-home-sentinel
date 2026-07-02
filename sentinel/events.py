@@ -178,6 +178,28 @@ class EventLedger:
                 row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
         return int(row["n"]) if row else 0
 
+    def mark_notified(self, event_id: int) -> bool:
+        """Set notified=1 for an event. Returns True if a row was updated."""
+        with self._lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "UPDATE events SET notified = 1 WHERE id = ?", (int(event_id),)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+
+    def update_entities(self, event_id: int, entities: Dict[str, Any]) -> bool:
+        """Replace the entities JSON for an event. Returns True on update."""
+        payload = json.dumps(entities or {})
+        with self._lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "UPDATE events SET entities = ? WHERE id = ?",
+                    (payload, int(event_id)),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+
 
 def _row_to_record(row: sqlite3.Row) -> EventRecord:
     try:

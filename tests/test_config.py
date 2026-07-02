@@ -30,7 +30,11 @@ def test_load_real_config_has_expected_sections():
         "detector",
         "face_recognition",
         "storage",
+        "clips",
+        "dvr",
         "dashboard",
+        "video_metadata",
+        "voice",
         "performance",
     ):
         assert config.get(section) is not None, f"missing section: {section}"
@@ -62,6 +66,15 @@ def test_partial_config_is_merged_over_defaults(tmp_path):
     # ...while untouched values still come from the defaults.
     assert config.get("dashboard", "host") == DEFAULT_CONFIG["dashboard"]["host"]
     assert config.get("camera", "target_fps") == DEFAULT_CONFIG["camera"]["target_fps"]
+
+
+def test_voice_defaults_present():
+    """Voice settings should load with spoken replies enabled by default."""
+    config = load_config()
+    assert config.get("voice", "enabled") is True
+    assert config.get("voice", "speak_text_queries") is False
+    assert config.get("voice", "wake_word_enabled") is False
+    assert config.get("voice", "language") == "en-US"
 
 
 def test_missing_file_uses_defaults(tmp_path):

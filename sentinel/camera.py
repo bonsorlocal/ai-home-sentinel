@@ -79,7 +79,10 @@ class Camera:
         self._width = int(cam.get("width", 1280))
         self._height = int(cam.get("height", 720))
         self._target_fps = float(cam.get("target_fps", 20)) or 20.0
-        self._jpeg_quality = 80
+        self._stream_width = int(cam.get("stream_width", 640))
+        self._stream_height = int(cam.get("stream_height", 360))
+        self._stream_fps = float(cam.get("stream_fps", 10)) or 10.0
+        self._stream_jpeg_quality = int(cam.get("stream_jpeg_quality", 55))
 
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -126,6 +129,9 @@ class Camera:
             "width": self._width,
             "height": self._height,
             "target_fps": self._target_fps,
+            "stream_width": self._stream_width,
+            "stream_height": self._stream_height,
+            "stream_fps": self._stream_fps,
             "message": self._message,
         }
 
@@ -148,6 +154,9 @@ class Camera:
             _log(self._message)
             try:
                 self._capture_until_stopped(read)
+            except Exception as error:  # noqa: BLE001 - keep camera loop resilient
+                self._message = f"Capture loop error: {error}. Reconnecting..."
+                _log(self._message)
             finally:
                 self._safe_close(close)
 
@@ -161,7 +170,9 @@ class Camera:
     def _capture_until_stopped(self, read: Reader) -> None:
         """Grab, encode, and store frames until told to stop or the camera fails."""
         min_interval = 1.0 / self._target_fps
+        stream_interval = 1.0 / self._stream_fps
         consecutive_failures = 0
+        last_stream_at = 0.0
 
         while not self._stop_event.is_set():
             start = time.monotonic()
@@ -177,9 +188,18 @@ class Camera:
                 continue
             consecutive_failures = 0
 
-            jpeg = _encode_jpeg(frame, self._jpeg_quality)
-            if jpeg is not None:
-                self.frame_store.update(jpeg, frame)
+            now = time.monotonic()
+            stream_jpeg = None
+            if now - last_stream_at >= stream_interval:
+                stream_jpeg = _encode_stream_jpeg(
+                    frame,
+                    self._stream_width,
+                    self._stream_height,
+                    self._stream_jpeg_quality,
+                )
+                last_stream_at = now
+
+            self.frame_store.update(frame, stream_jpeg)
 
             # Pace the loop to roughly the target FPS so we don't peg the CPU.
             elapsed = time.monotonic() - start
@@ -191,7 +211,15 @@ class Camera:
     def _open_backend(self) -> Optional[Tuple[Reader, Closer, str]]:
         """Open the camera according to ``camera.type``, with auto-fallback."""
         if self._type == "picamera2":
-            return self._open_picamera2()
+            backend = self._open_picamera2()
+            if backend is not None:
+                return backend
+            # If Picamera2 is forced but unavailable (common on localhost dev),
+            # fall back to OpenCV so local USB/integrated cameras can still work.
+            if Picamera2 is None:
+                _log("Picamera2 unavailable; falling back to OpenCV backend.")
+                return self._open_opencv()
+            return None
         if self._type == "opencv":
             return self._open_opencv()
 
@@ -289,6 +317,18 @@ class Camera:
             close()
         except Exception as error:  # noqa: BLE001 - closing should never crash us
             _log(f"Problem while closing the camera: {error}")
+
+
+def _encode_stream_jpeg(frame, width: int, height: int, quality: int) -> Optional[bytes]:
+    """Downscale and JPEG-encode for the browser live view only."""
+    if frame is None:
+        return None
+    if cv2 is not None and (frame.shape[1] != width or frame.shape[0] != height):
+        try:
+            frame = cv2.resize(frame, (width, height))
+        except Exception as error:  # noqa: BLE001
+            _log(f"Could not resize stream frame: {error}")
+    return _encode_jpeg(frame, quality)
 
 
 def _encode_jpeg(frame, quality: int) -> Optional[bytes]:

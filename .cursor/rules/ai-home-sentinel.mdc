@@ -1,0 +1,64 @@
+---
+description: AI Home Sentinel — project conventions, architecture, and agent workflow
+alwaysApply: false
+---
+# AI Home Sentinel
+
+Pi-based home security camera: capture → motion → YOLO detection → face recognition → event ledger → reasoner → dashboard. Optional Grok "brain" for chat and daily recap.
+
+**Priorities:** reliability on Raspberry Pi, low resource use, graceful offline behavior, small focused diffs.
+
+**Primary runtime:** Raspberry Pi at `/home/sentinel/ai-home-sentinel` (systemd `sentinel.service`). Windows PC is dev/tests only — never treat a PC `run.py` session as production verification. Deploy with `scripts/deploy_pi.ps1` or `scripts/deploy_pi.sh`.
+
+## Architecture
+
+```
+run.py → Camera + SentinelRuntime + Flask dashboard
+Runtime: motion → detector → faces → reasoner → ledger/storage/brain
+config.yaml controls behavior; secrets.yaml holds grok_api_key (local only)
+Dashboard voice: browser Web Speech API (mic in, spoken replies out)
+```
+
+| Area | Location |
+|------|----------|
+| Settings | `config.yaml` (prefer over hardcoding) |
+| Main code | `sentinel/` |
+| Web UI | `web/templates/`, `web/static/` |
+| Tests | `tests/` |
+| Live brain smoke test | `scripts/smoke_brain.py` (Pi, server running) |
+| Entry point | `python run.py` → http://localhost:5000 |
+
+## Do not touch
+
+- `venv/`, `data/`, `*.db`, `logs/` — generated at runtime
+- `secrets.yaml` — git-ignored; never commit, log, or return API keys
+- Unrelated refactors when fixing a single bug or feature
+
+## Pi constraints
+
+- Keep dependencies minimal (`requirements.txt`). Avoid heavy new packages.
+- Picamera2 is a system package on Pi, not pip — see `requirements.txt` comments.
+- On Pi, install CPU-only PyTorch before ultralytics.
+- Prefer `config.yaml` toggles over code changes for behavior tuning.
+- Camera/brain/detector must fail gracefully — never crash the whole app.
+
+## Autonomous workflow
+
+1. Read relevant files before editing.
+2. Make the smallest change that solves the task.
+3. Run tests: `python -m pytest tests/` (activate venv first on Windows: `.\venv\Scripts\Activate.ps1`).
+4. If tests fail, fix and re-run until green.
+5. End with: what changed, test results, Pi deploy steps if behavior changed.
+6. After code changes, remind user to deploy to Pi (`scripts/deploy_pi.ps1`) — do not leave production running on Windows.
+
+**Scope:** one goal per session. Do not expand into drive-by cleanups.
+
+## Git
+
+Do not commit or push unless the user explicitly asks.
+
+## Verification checklist (include in task summaries)
+
+- [ ] `pytest` passes
+- [ ] No secrets in diff or logs
+- [ ] Pi-only behavior flagged if untestable locally

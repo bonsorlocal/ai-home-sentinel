@@ -12,19 +12,39 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from sentinel.config import load_config  # noqa: E402
+from sentinel.config import Config, DEFAULT_CONFIG, load_config  # noqa: E402
 from sentinel.face_recognition_module import FaceRecognizer  # noqa: E402
 from sentinel.frame_store import FrameStore  # noqa: E402
 from sentinel.motion import MotionDetector  # noqa: E402
 
 
-def test_face_recognition_disabled_by_default():
-    config = load_config()
+def _face_config(**overrides):
+    cfg = {
+        "face_recognition": {
+            "enabled": False,
+            "known_faces_dir": "data/known_faces",
+            "unknown_faces_dir": "data/events/unknown_faces",
+            "tolerance": 0.5,
+            "run_only_when_person_detected": True,
+        }
+    }
+    cfg["face_recognition"].update(overrides)
+    return Config(cfg)
+
+
+def test_face_recognition_disabled_by_default_in_code_defaults():
+    """Built-in defaults keep faces off until config.yaml enables them."""
+    config = Config(DEFAULT_CONFIG)
     assert config.get("face_recognition", "enabled") is False
 
 
-def test_face_status_when_disabled():
+def test_face_recognition_enabled_in_project_config():
     config = load_config()
+    assert config.get("face_recognition", "enabled") is True
+
+
+def test_face_status_when_disabled():
+    config = _face_config(enabled=False)
     store = FrameStore()
     motion = MotionDetector(config, store)
     faces = FaceRecognizer(config, store, motion)
@@ -33,8 +53,21 @@ def test_face_status_when_disabled():
     assert "disabled" in faces.status()["message"].lower()
 
 
+def test_face_status_when_enabled_without_library():
+    config = _face_config(enabled=True)
+    store = FrameStore()
+    motion = MotionDetector(config, store)
+    faces = FaceRecognizer(config, store, motion)
+    faces.start()
+    status = faces.status()
+    if faces.is_running():
+        assert status["enabled"] is True
+    else:
+        assert "face_recognition" in status["message"].lower()
+
+
 def test_match_frame_empty():
-    config = load_config()
+    config = _face_config()
     store = FrameStore()
     motion = MotionDetector(config, store)
     faces = FaceRecognizer(config, store, motion)
@@ -49,7 +82,7 @@ def test_enroll_and_match(tmp_path):
     pytest.importorskip("face_recognition")
     import cv2
 
-    config = load_config()
+    config = _face_config(enabled=True)
     store = FrameStore()
     motion = MotionDetector(config, store)
     faces = FaceRecognizer(config, store, motion)

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Home Sentinel - DVR Timeline</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <header>
+      <h1>DVR Timeline</h1>
+      <p class="subtitle">48h continuous USB recording</p>
+    </header>
+    <main>
+      <section class="card">
+        <p><a href="/">Back to dashboard</a> | <a href="/events">Event ledger</a></p>
+        <p class="muted" id="dvr-state">Loading DVR status...</p>
+      </section>
+      <section class="card">
+        <h2>Find range</h2>
+        <form id="range-form" class="chat-form">
+          <label for="start">Start</label>
+          <input id="start" type="datetime-local" />
+          <label for="end">End</label>
+          <input id="end" type="datetime-local" />
+          <button type="submit" class="btn">Load segments</button>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Segments</h2>
+        <p class="muted" id="range-summary">No segments loaded.</p>
+        <div id="segments-list"></div>
+      </section>
+    </main>
+    <script>
+      (function () {
+        "use strict";
+        var listEl = document.getElementById("segments-list");
+        var summaryEl = document.getElementById("range-summary");
+        var stateEl = document.getElementById("dvr-state");
+        var activeVideo = null;
+
+        function toLocalInput(iso) {
+          if (!iso) return "";
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return "";
+          var pad = function (n) {
+            return String(n).padStart(2, "0");
+          };
+          return (
+            d.getFullYear() +
+            "-" +
+            pad(d.getMonth() + 1) +
+            "-" +
+            pad(d.getDate()) +
+            "T" +
+            pad(d.getHours()) +
+            ":" +
+            pad(d.getMinutes())
+          );
+        }
+
+        function localInputToIso(value) {
+          if (!value) return "";
+          var d = new Date(value);
+          if (isNaN(d.getTime())) return "";
+          return d.toISOString();
+        }
+
+        function readQueryRange() {
+          var params = new URLSearchParams(window.location.search);
+          return { start: params.get("start") || "", end: params.get("end") || "" };
+        }
+
+        function renderSegments(segments) {
+          listEl.innerHTML = "";
+          if (!segments || !segments.length) {
+            summaryEl.textContent = "No DVR segments found in this range.";
+            return;
+          }
+          summaryEl.textContent = "Loaded " + segments.length + " segments.";
+          segments.forEach(function (seg) {
+            var card = document.createElement("article");
+            card.className = "event-card";
+
+            var title = document.createElement("h3");
+            title.textContent = "Segment #" + seg.id;
+            card.appendChild(title);
+
+            var meta = document.createElement("p");
+            meta.className = "muted";
+            meta.textContent =
+              seg.start_ts +
+              " -> " +
+              seg.end_ts +
+              " | motion=" +
+              Number(seg.motion_score || 0).toFixed(3) +
+              " | person_count=" +
+              (seg.person_count || 0);
+            card.appendChild(meta);
+
+            var details = document.createElement("p");
+            details.textContent =
+              "labels: " +
+              ((seg.object_labels || []).join(", ") || "none") +
+              " | summary: " +
+              (seg.summary || "n/a");
+            card.appendChild(details);
+
+            var playBtn = document.createElement("button");
+            playBtn.className = "btn";
+            playBtn.textContent = "Play segment";
+            playBtn.addEventListener("click", function () {
+              if (activeVideo) {
+                activeVideo.pause();
+                activeVideo.removeAttribute("src");
+                activeVideo.load();
+                activeVideo.remove();
+                activeVideo = null;
+              }
+              var video = document.createElement("video");
+              video.controls = true;
+              video.preload = "metadata";
+              video.style.maxWidth = "100%";
+              video.src = "/api/dvr/segment/" + seg.id;
+              card.appendChild(video);
+              activeVideo = video;
+              video.play().catch(function () {});
+            });
+            card.appendChild(playBtn);
+            listEl.appendChild(card);
+          });
+        }
+
+        function loadStatus() {
+          fetch("/api/dvr/status", { cache: "no-store" })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (data) {
+              if (data.available) {
+                stateEl.textContent =
+                  "DVR active on " +
+                  data.storage_root +
+                  " | retention " +
+                  data.retention_hours +
+                  "h | segment " +
+                  data.segment_seconds +
+                  "s";
+              } else {
+                stateEl.textContent = "DVR unavailable: " + (data.message || "unknown");
+              }
+            })
+            .catch(function () {
+              stateEl.textContent = "Could not read DVR status.";
+            });
+        }
+
+        function loadRange(startIso, endIso) {
+          var url =
+            "/api/dvr/range?start=" +
+            encodeURIComponent(startIso) +
+            "&end=" +
+            encodeURIComponent(endIso) +
+            "&limit=300";
+          fetch(url, { cache: "no-store" })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (data) {
+              renderSegments(data.segments || []);
+            })
+            .catch(function () {
+              summaryEl.textContent = "Could not load DVR segments.";
+            });
+        }
+
+        var query = readQueryRange();
+        var now = new Date();
+        var defaultEnd = query.end || now.toISOString();
+        var defaultStart =
+          query.start || new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+        document.getElementById("start").value = toLocalInput(defaultStart);
+        document.getElementById("end").value = toLocalInput(defaultEnd);
+        loadStatus();
+        loadRange(defaultStart, defaultEnd);
+
+        document.getElementById("range-form").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var startIso = localInputToIso(document.getElementById("start").value);
+          var endIso = localInputToIso(document.getElementById("end").value);
+          loadRange(startIso, endIso);
+        });
+      })();
+    </script>
+  </body>
+</html>

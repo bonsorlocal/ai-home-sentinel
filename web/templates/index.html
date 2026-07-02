@@ -43,6 +43,15 @@
           </p>
         </div>
         <form class="chat-form" id="chat-form" autocomplete="off">
+          <button
+            type="button"
+            id="voice-btn"
+            class="btn btn-voice"
+            title="Ask with your voice (hold to speak)"
+            aria-label="Ask with your voice"
+          >
+            <span class="voice-icon" aria-hidden="true">&#127908;</span>
+          </button>
           <input
             type="text"
             id="chat-input"
@@ -52,6 +61,10 @@
           />
           <button type="submit" id="chat-send" class="btn">Ask</button>
         </form>
+        <p class="muted voice-hint" id="voice-hint">
+          Tap the microphone to ask aloud. Sentinel speaks answers back when voice
+          is enabled in config.yaml.
+        </p>
         <button type="button" id="summary-btn" class="btn btn-secondary">
           Summarize my day
         </button>
@@ -98,11 +111,14 @@
           <li>Camera: <span id="camera-active" class="badge">off</span></li>
           <li>Motion: <span id="motion-active" class="badge">off</span></li>
           <li>Detector: <span id="detector-active" class="badge">off</span></li>
+          <li>Faces: <span id="face-active" class="badge">off</span></li>
           <li>Brain: <span id="brain-active" class="badge">off</span></li>
           <li>Reasoner: <span id="reasoner-active" class="badge">off</span></li>
           <li>Events: <a href="/events" id="event-link">view log</a> (<span id="event-count">0</span>)</li>
+          <li>DVR: <a href="/dvr" id="dvr-link">timeline</a> (<span id="dvr-state">checking...</span>)</li>
         </ul>
         <p class="muted" id="camera-detail">-</p>
+        <p class="muted" id="face-detail">-</p>
       </section>
 
       <section class="card error-card hidden" id="error-card">

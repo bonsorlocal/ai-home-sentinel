@@ -14,11 +14,17 @@
 
     <main class="events-main">
       <section class="card">
-        <h2>Recent events</h2>
+        <h2>Recent incidents</h2>
         <p class="muted">
           <a href="/">Back to dashboard</a>
           &nbsp;|&nbsp;
+          <a href="/dvr">Open DVR timeline</a>
+          &nbsp;|&nbsp;
+          <button type="button" id="refresh-btn" class="btn-link">Refresh</button>
+          &nbsp;|&nbsp;
           <span id="event-count">Loading...</span>
+          &nbsp;|&nbsp;
+          <a href="#" id="toggle-filter">Show all ledger entries</a>
         </p>
         <ul id="event-list" class="event-list">
           <li class="muted">Loading events...</li>
@@ -27,12 +33,15 @@
     </main>
 
     <footer>
-      <p class="muted">Data stays on this device. Tier 1 = observation; Tier 2 = alert.</p>
+      <p class="muted">Tier 1 = quiet log entry. Tier 2 = worth a snapshot + future learning note.</p>
     </footer>
 
     <script>
       (function () {
         "use strict";
+
+        var showAll = false;
+        var activePlayer = null;
 
         function tierBadge(tier) {
           if (tier === 2) return '<span class="badge badge-bad tier2-badge">&#9888; ALERT</span>';
@@ -49,52 +58,265 @@
           );
         }
 
-        function render(data) {
-          var list = document.getElementById("event-list");
-          var countEl = document.getElementById("event-count");
-          var tier2count = (data.events || []).filter(function(e){ return e.tier === 2; }).length;
-          countEl.textContent = data.count + " total events" +
-            (tier2count > 0 ? " \u2014 " + tier2count + " alerts" : "");
+        function renderClipSummary(ev) {
+          if (!ev.clip_summary) return "";
+          return (
+            '<div class="event-clip-summary"><strong>Clip summary:</strong> ' +
+            ev.clip_summary +
+            "</div>"
+          );
+        }
 
-          if (!data.events || data.events.length === 0) {
-            list.innerHTML = '<li class="muted">No events recorded yet. Wave at the camera!</li>';
+        function renderClip(ev) {
+          if (!ev.clip_url) return "";
+          return (
+            '<div class="event-clip-wrap">' +
+            '<button type="button" class="btn-play-clip" data-clip-url="' + ev.clip_url + '">Play clip</button>' +
+            '<div class="clip-player-host"></div>' +
+            '<p class="muted"><a href="' + ev.clip_url + '" target="_blank" rel="noopener">Open clip</a></p>' +
+            "</div>"
+          );
+        }
+
+        function renderPills(values, cls) {
+          if (!values || values.length === 0) return "";
+          return (
+            '<div class="' + cls + '">' +
+            values.map(function (v) {
+              return '<span class="badge">' + String(v) + "</span>";
+            }).join(" ") +
+            "</div>"
+          );
+        }
+
+        function renderClipStatus(ev) {
+          if (ev.clip_url) {
+            return '<span class="badge badge-ok">Clip saved</span>';
+          }
+          if (ev.clip_status === "disabled") {
+            return '<span class="badge">Clips disabled</span>';
+          }
+          if (ev.clip_status === "skipped") {
+            return '<span class="badge">Clip skipped</span>';
+          }
+          if (ev.clip_status === "not_saved" && ev.clip_expected) {
+            var note = ev.clip_note ? " — " + ev.clip_note : "";
+            return '<span class="badge badge-warn">Clip not saved' + note + "</span>";
+          }
+          return "";
+        }
+
+        function renderDvrJump(ev) {
+          if (!ev.session_started_at || !ev.session_ended_at) return "";
+          var start = new Date(ev.session_started_at);
+          var end = new Date(ev.session_ended_at);
+          if (isNaN(start.getTime()) || isNaN(end.getTime())) return "";
+          var padMs = 5 * 60 * 1000;
+          var jumpStart = new Date(start.getTime() - padMs).toISOString();
+          var jumpEnd = new Date(end.getTime() + padMs).toISOString();
+          var href =
+            "/dvr?start=" +
+            encodeURIComponent(jumpStart) +
+            "&end=" +
+            encodeURIComponent(jumpEnd);
+          return (
+            '<p class="muted"><a href="' + href + '">Open nearby DVR window</a></p>'
+          );
+        }
+
+        function renderEventBody(ev) {
+          var snap = ev.snapshot_path
+            ? '<br><span class="muted">Snapshot saved</span>'
+            : "";
+          var clipSummary = renderClipSummary(ev);
+          var clip = renderClip(ev);
+          var repeatCount = Number(ev.repeat_count || 1);
+          var repeatNote = repeatCount > 1
+            ? '<div class="event-repeat-note muted">Suppressed repeats: ' + (repeatCount - 1) + "</div>"
+            : "";
+          var duration = ev.session_duration_seconds != null ? ev.session_duration_seconds + "s" : "?";
+          var peakArea = ev.session_peak_area != null ? ev.session_peak_area : "?";
+          var actor = ev.primary_actor || ev.source || "motion";
+          var incidentId = ev.incident_id || ("event-" + ev.id);
+          var lifecycleText = (ev.lifecycle || []).map(function (step) {
+            return step && step.state ? String(step.state) : "";
+          }).filter(Boolean).join(" \u2192 ");
+          return (
+            '<div class="event-header">' +
+            tierBadge(ev.tier) +
+            renderClipStatus(ev) +
+            importanceBar(ev.importance) +
+            ' <strong>' + ev.title + '</strong>' +
+            ' <span class="muted">(' + ev.source + ')</span>' +
+            "</div>" +
+            '<div class="event-meta muted">' + ev.timestamp + " | Incident " + incidentId + " | Primary: " + actor + "</div>" +
+            '<div class="event-session-meta muted">Duration: ' + duration +
+              " | Peak area: " + peakArea + "</div>" +
+            (lifecycleText ? '<div class="event-session-meta muted">Lifecycle: ' + lifecycleText + "</div>" : "") +
+            renderPills(ev.actors, "event-actors") +
+            renderPills(ev.actions, "event-actions") +
+            '<div class="event-summary">' + (ev.summary || "") + snap + "</div>" +
+            repeatNote +
+            clipSummary +
+            clip +
+            renderDvrJump(ev)
+          );
+        }
+
+        function renderSingleEventItem(ev, extraClass) {
+          var alertClass = ev.tier === 2 ? " event-alert" : "";
+          return (
+            '<li class="event-item' + alertClass + (extraClass || "") + '" data-event-id="' + ev.id + '">' +
+            renderEventBody(ev) +
+            "</li>"
+          );
+        }
+
+        function eventsUrl() {
+          var params = new URLSearchParams();
+          params.set("limit", showAll ? "50" : "30");
+          params.set("filter", showAll ? "all" : "incidents");
+          return "/api/events?" + params.toString();
+        }
+
+        function updateCount(data) {
+          var countEl = document.getElementById("event-count");
+          var tier2count = (data.events || []).filter(function (e) { return e.tier === 2; }).length;
+          var label = showAll ? "ledger entries" : "clip incidents";
+          countEl.textContent = data.count + " total events, " + (data.events || []).length + " " + label +
+            (tier2count > 0 ? " \u2014 " + tier2count + " alerts" : "");
+        }
+
+        function stopActivePlayer() {
+          if (!activePlayer) return;
+          var host = activePlayer.host;
+          if (host) {
+            host.innerHTML = "";
+          }
+          activePlayer = null;
+        }
+
+        function bindPlayButtons(root) {
+          var scope = root || document;
+          scope.querySelectorAll(".btn-play-clip").forEach(function (btn) {
+            if (btn.dataset.bound === "1") return;
+            btn.dataset.bound = "1";
+            btn.addEventListener("click", function () {
+              var url = btn.getAttribute("data-clip-url");
+              var wrap = btn.closest(".event-clip-wrap");
+              var host = wrap.querySelector(".clip-player-host");
+              var existing = host.querySelector("video");
+              if (activePlayer && activePlayer.host !== host) {
+                stopActivePlayer();
+              }
+              if (existing) {
+                existing.play();
+                activePlayer = { host: host, video: existing };
+                return;
+              }
+              var video = document.createElement("video");
+              video.className = "event-clip";
+              video.controls = true;
+              video.preload = "metadata";
+              video.playsInline = true;
+              video.src = url;
+              host.innerHTML = "";
+              host.appendChild(video);
+              activePlayer = { host: host, video: video };
+              video.play();
+            });
+          });
+        }
+
+        function prependNewEvents(data) {
+          var list = document.getElementById("event-list");
+          var events = data.events || [];
+          updateCount(data);
+
+          if (events.length === 0 && list.querySelectorAll(".event-item").length === 0) {
+            list.innerHTML = showAll
+              ? '<li class="muted">No events recorded yet. Wave at the camera!</li>'
+              : '<li class="muted">No clip incidents yet. Short motion bursts are logged without clips.</li>';
             return;
           }
 
-          list.innerHTML = data.events
-            .map(function (ev) {
-              var snap = ev.snapshot_path
-                ? '<br><span class="muted">Snapshot saved</span>'
-                : "";
-              var alertClass = ev.tier === 2 ? " event-alert" : "";
-              return (
-                '<li class="event-item' + alertClass + '">' +
-                '<div class="event-header">' +
-                tierBadge(ev.tier) +
-                importanceBar(ev.importance) +
-                ' <strong>' + ev.title + '</strong>' +
-                ' <span class="muted">(' + ev.source + ')</span>' +
-                "</div>" +
-                '<div class="event-meta muted">' + ev.timestamp + "</div>" +
-                '<div class="event-summary">' + (ev.summary || "") + snap + "</div>" +
-                "</li>"
-              );
-            })
-            .join("");
+          var loadingOnly = list.children.length === 1 && list.querySelector("li.muted");
+          if (loadingOnly) {
+            list.innerHTML = "";
+          }
+
+          var existingIds = new Set();
+          list.querySelectorAll(".event-item").forEach(function (li) {
+            existingIds.add(String(li.getAttribute("data-event-id")));
+          });
+
+          var toPrepend = events.filter(function (ev) {
+            return !existingIds.has(String(ev.id));
+          });
+
+          toPrepend.reverse().forEach(function (ev) {
+            var li = document.createElement("li");
+            li.className = "event-item" + (ev.tier === 2 ? " event-alert" : "");
+            li.setAttribute("data-event-id", ev.id);
+            li.innerHTML = renderEventBody(ev);
+            list.insertBefore(li, list.firstChild);
+            bindPlayButtons(li);
+          });
         }
 
-        function refresh() {
-          fetch("/api/events", { cache: "no-store" })
+        function anyVideoPlaying() {
+          return activePlayer && activePlayer.video && !activePlayer.video.paused && !activePlayer.video.ended;
+        }
+
+        function refresh(fullReplace) {
+          fetch(eventsUrl(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
-            .then(render)
+            .then(function (data) {
+              if (!fullReplace && (anyVideoPlaying() || activePlayer)) {
+                prependNewEvents(data);
+                return;
+              }
+              var list = document.getElementById("event-list");
+              updateCount(data);
+              if (!data.events || data.events.length === 0) {
+                list.innerHTML = showAll
+                  ? '<li class="muted">No events recorded yet. Wave at the camera!</li>'
+                  : '<li class="muted">No clip incidents yet. Short motion bursts are logged without clips.</li>';
+                stopActivePlayer();
+                return;
+              }
+              list.innerHTML = data.events
+                .map(function (ev) { return renderSingleEventItem(ev, ""); })
+                .join("");
+              stopActivePlayer();
+              bindPlayButtons(list);
+            })
             .catch(function () {
               document.getElementById("event-list").innerHTML =
                 '<li class="muted">Could not load events.</li>';
             });
         }
 
-        refresh();
-        setInterval(refresh, 5000);
+        function pollCountOnly() {
+          fetch(eventsUrl(), { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(updateCount)
+            .catch(function () {});
+        }
+
+        document.getElementById("refresh-btn").addEventListener("click", function () {
+          refresh(true);
+        });
+
+        document.getElementById("toggle-filter").addEventListener("click", function (e) {
+          e.preventDefault();
+          showAll = !showAll;
+          e.target.textContent = showAll ? "Show clip incidents only" : "Show all ledger entries";
+          refresh(true);
+        });
+
+        refresh(true);
+        setInterval(pollCountOnly, 30000);
       })();
     </script>
   </body>

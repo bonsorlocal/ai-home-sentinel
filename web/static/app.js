@@ -14,6 +14,15 @@
   // so we only start or stop it when the camera state actually changes.
   var videoStreaming = false;
 
+  // Voice settings from /status (defaults until first refresh).
+  var voiceSettings = {
+    enabled: true,
+    speak_text_queries: false,
+    wake_word_enabled: false,
+    wake_word: "hey sentinel",
+    language: "en-US",
+  };
+
   function byId(id) {
     return document.getElementById(id);
   }
@@ -166,6 +175,16 @@
       data.detector_active ? "badge-ok" : "badge-unknown"
     );
     setBadge(
+      byId("face-active"),
+      data.face_recognition_active ? "on" : "off",
+      data.face_recognition_active ? "badge-ok" : "badge-unknown"
+    );
+    var faceInfo = (data.runtime && data.runtime.face_recognition) || {};
+    var faceDetail = byId("face-detail");
+    if (faceDetail) {
+      faceDetail.textContent = faceInfo.message || "-";
+    }
+    setBadge(
       byId("brain-active"),
       data.brain_active ? "on" : "off",
       data.brain_active ? "badge-ok" : "badge-unknown"
@@ -179,9 +198,24 @@
       reasonerOn ? "badge-ok" : "badge-unknown"
     );
     updateBrainState(data.brain || {});
+    if (data.voice) {
+      voiceSettings = data.voice;
+      updateVoiceHint();
+    }
     var eventCount = byId("event-count");
     if (eventCount) {
       eventCount.textContent = data.event_count != null ? data.event_count : "0";
+    }
+    var dvrState = byId("dvr-state");
+    if (dvrState) {
+      var dvr = data.dvr || {};
+      if (dvr.available) {
+        dvrState.textContent = "ready";
+      } else if (dvr.enabled) {
+        dvrState.textContent = "unavailable";
+      } else {
+        dvrState.textContent = "off";
+      }
     }
   }
 
@@ -206,6 +240,190 @@
   // -------------------------------------------------------------------- //
   // Brain / chat
   // -------------------------------------------------------------------- //
+  function updateVoiceHint() {
+    var hint = byId("voice-hint");
+    if (!hint) return;
+    if (!voiceSettings.enabled) {
+      hint.textContent =
+        "Spoken replies are off (voice.enabled: false in config.yaml).";
+      return;
+    }
+    if (voiceSettings.wake_word_enabled) {
+      hint.textContent =
+        'Say "' +
+        voiceSettings.wake_word +
+        '" then ask your question. Sentinel speaks answers back.';
+      return;
+    }
+    hint.textContent =
+      "Tap the microphone, ask aloud, then listen for Sentinel's spoken reply.";
+  }
+
+  // Browser speech: mic in, natural voice out. Wake word comes later.
+  var Voice = (function () {
+    var SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    var supported =
+      !!SpeechRecognition && typeof window.speechSynthesis !== "undefined";
+    var recognition = null;
+    var listening = false;
+    var voicesLoaded = false;
+    var selectedVoice = null;
+
+    function loadVoices() {
+      if (!supported) return;
+      var voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return;
+      voicesLoaded = true;
+      selectedVoice = pickNaturalVoice(voices, voiceSettings.language || "en-US");
+    }
+
+    function pickNaturalVoice(voices, lang) {
+      var langPrefix = (lang || "en-US").split("-")[0].toLowerCase();
+      var patterns = [
+        /Microsoft .* Natural .* English/i,
+        /Microsoft .* Online .* Natural/i,
+        /Google .* English.*United States/i,
+        /Google US English/i,
+        /Samantha/i,
+        /Karen/i,
+        /Daniel/i,
+        /Jenny/i,
+        /Aria/i,
+      ];
+      var i;
+      for (i = 0; i < patterns.length; i++) {
+        var matched = voices.filter(function (v) {
+          return (
+            patterns[i].test(v.name) &&
+            v.lang.toLowerCase().indexOf(langPrefix) === 0
+          );
+        });
+        if (matched.length) return matched[0];
+      }
+      for (i = 0; i < voices.length; i++) {
+        if (voices[i].lang.toLowerCase().indexOf(langPrefix) === 0) {
+          return voices[i];
+        }
+      }
+      return voices[0] || null;
+    }
+
+    if (supported) {
+      loadVoices();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+    }
+
+    function stopSpeaking() {
+      if (!supported) return;
+      window.speechSynthesis.cancel();
+    }
+
+    function speak(text) {
+      if (!supported || !text) return;
+      if (!voiceSettings.enabled) return;
+      stopSpeaking();
+      if (!voicesLoaded) loadVoices();
+      var utter = new SpeechSynthesisUtterance(text);
+      utter.lang = voiceSettings.language || "en-US";
+      utter.rate = 0.95;
+      utter.pitch = 1;
+      if (selectedVoice) utter.voice = selectedVoice;
+      window.speechSynthesis.speak(utter);
+    }
+
+    function shouldSpeak(fromVoice) {
+      if (!voiceSettings.enabled) return false;
+      return fromVoice || !!voiceSettings.speak_text_queries;
+    }
+
+    function setListening(active) {
+      listening = active;
+      var btn = byId("voice-btn");
+      if (!btn) return;
+      btn.classList.toggle("listening", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+
+    function startListening(onResult, onError) {
+      if (!supported || listening) return false;
+      stopSpeaking();
+      recognition = new SpeechRecognition();
+      recognition.lang = voiceSettings.language || "en-US";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.continuous = false;
+
+      recognition.onstart = function () {
+        setListening(true);
+      };
+      recognition.onend = function () {
+        setListening(false);
+      };
+      recognition.onerror = function (event) {
+        setListening(false);
+        if (onError) onError(event.error || "unknown");
+      };
+      recognition.onresult = function (event) {
+        setListening(false);
+        var transcript = "";
+        if (event.results && event.results[0] && event.results[0][0]) {
+          transcript = event.results[0][0].transcript.trim();
+        }
+        if (transcript && onResult) onResult(transcript);
+      };
+
+      try {
+        recognition.start();
+        return true;
+      } catch (err) {
+        setListening(false);
+        if (onError) onError("start-failed");
+        return false;
+      }
+    }
+
+    function initUi() {
+      var btn = byId("voice-btn");
+      if (!btn) return;
+      if (!supported) {
+        btn.classList.add("unsupported");
+        btn.disabled = true;
+        btn.title = "Voice not supported in this browser (try Chrome or Edge)";
+        return;
+      }
+      btn.addEventListener("click", function () {
+        if (listening) {
+          if (recognition) recognition.stop();
+          return;
+        }
+        startListening(
+          function (question) {
+            appendChat("you", question);
+            postBrain("/api/chat", { question: question }, "Thinking...", true);
+          },
+          function (err) {
+            if (err === "no-speech") {
+              appendChat("bot", "I didn't catch that. Tap the mic and try again.");
+            } else if (err !== "aborted") {
+              appendChat("bot", "Voice input failed (" + err + "). Try typing instead.");
+            }
+          }
+        );
+      });
+    }
+
+    return {
+      supported: supported,
+      speak: speak,
+      shouldSpeak: shouldSpeak,
+      stopSpeaking: stopSpeaking,
+      initUi: initUi,
+    };
+  })();
+
   function updateBrainState(brain) {
     var stateEl = byId("brain-state");
     if (!stateEl) return;
@@ -243,12 +461,16 @@
     var input = byId("chat-input");
     var send = byId("chat-send");
     var summary = byId("summary-btn");
+    var voiceBtn = byId("voice-btn");
     if (input) input.disabled = busy;
     if (send) send.disabled = busy;
     if (summary) summary.disabled = busy;
+    if (voiceBtn && Voice.supported) voiceBtn.disabled = busy;
   }
 
-  function postBrain(url, body, pendingText) {
+  function postBrain(url, body, pendingText, fromVoice) {
+    fromVoice = !!fromVoice;
+    if (fromVoice) Voice.stopSpeaking();
     setChatBusy(true);
     var pending = appendChat("bot", pendingText);
     if (pending) pending.classList.add("chat-pending");
@@ -263,14 +485,20 @@
       })
       .then(function (data) {
         if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
-        appendChat("bot", (data && data.answer) || "No answer was returned.");
+        var answer = (data && data.answer) || "No answer was returned.";
+        appendChat("bot", answer);
+        if (Voice.shouldSpeak(fromVoice)) {
+          Voice.speak(answer);
+        }
       })
       .catch(function () {
         if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
-        appendChat(
-          "bot",
-          "Could not reach the dashboard. Check your connection and try again."
-        );
+        var msg =
+          "Could not reach the dashboard. Check your connection and try again.";
+        appendChat("bot", msg);
+        if (Voice.shouldSpeak(fromVoice)) {
+          Voice.speak(msg);
+        }
       })
       .finally(function () {
         setChatBusy(false);
@@ -288,7 +516,7 @@
       if (!question) return;
       appendChat("you", question);
       if (input) input.value = "";
-      postBrain("/api/chat", { question: question }, "Thinking...");
+      postBrain("/api/chat", { question: question }, "Thinking...", false);
     });
   }
 
@@ -296,9 +524,12 @@
   if (summaryBtn) {
     summaryBtn.addEventListener("click", function () {
       appendChat("you", "Summarize my day");
-      postBrain("/api/summary", {}, "Summarizing your day...");
+      postBrain("/api/summary", {}, "Summarizing your day...", false);
     });
   }
+
+  Voice.initUi();
+  updateVoiceHint();
 
   // Run once right away, then on a repeating timer.
   refresh();
