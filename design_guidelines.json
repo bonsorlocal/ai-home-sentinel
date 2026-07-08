@@ -1,0 +1,149 @@
+{
+  "theme": "DARK",
+  "archetype": "2 (Performance Pro / Tactical Minimalism)",
+  "design_philosophy": "A 'Control Room' aesthetic designed for high-visibility, rapid threat assessment, and data density. The UI must feel authoritative, precise, and highly functional. Employs a strict 'Technical Grid' with exposed 1px borders, sharp edges, and flat surfaces. No soft shadows; relies on stark contrasts and color-coded indicators.",
+  "colors": {
+    "background": {
+      "base": "#0A0A0A",
+      "surface": "#141416",
+      "surface_hover": "#1C1C1F",
+      "glass": "rgba(20, 20, 22, 0.7)"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#71717A"
+    },
+    "border": {
+      "default": "#27272A",
+      "focus": "#007AFF",
+      "alert": "#FF3B30"
+    },
+    "accents": {
+      "primary": "#007AFF",
+      "primary_hover": "#0056B3",
+      "alert": "#FF3B30",
+      "alert_glow": "rgba(255, 59, 48, 0.2)",
+      "warning": "#FF9500",
+      "safe": "#34C759",
+      "safe_glow": "rgba(52, 199, 89, 0.2)"
+    }
+  },
+  "typography": {
+    "font_families": {
+      "heading": "'Chivo', sans-serif",
+      "body": "'IBM Plex Sans', sans-serif",
+      "mono": "'JetBrains Mono', monospace"
+    },
+    "scales": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-bold",
+      "h4": "text-lg sm:text-xl font-semibold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-secondary",
+      "micro_label": "text-[10px] uppercase tracking-[0.2em] font-mono text-muted"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Dense but strictly organized. Utilize 'The Control Room Grid' protocol.",
+    "grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 or gap-6",
+    "container_padding": "p-4 sm:p-6 lg:p-8",
+    "card_padding": "p-4 lg:p-6",
+    "alignment": "Strict left-alignment for data and logs. Top-right for status indicators."
+  },
+  "components": {
+    "buttons": {
+      "shape": "rounded-sm",
+      "styles": "font-mono uppercase tracking-wider text-sm font-semibold transition-colors duration-200",
+      "primary": "bg-[#007AFF] text-white hover:bg-[#0056B3]",
+      "alert": "bg-[#FF3B30] text-white hover:bg-[#CC2F26]",
+      "outline": "border border-[#27272A] hover:border-[#FFFFFF] text-white"
+    },
+    "cards_and_surfaces": {
+      "style": "The 'Technical' Look",
+      "classes": "bg-[#141416] border border-[#27272A] rounded-sm",
+      "hover_state": "hover:border-[#3F3F46] transition-colors"
+    },
+    "badges": {
+      "shape": "rounded-none px-2 py-0.5",
+      "typography": "font-mono text-xs uppercase tracking-wider",
+      "variants": {
+        "live": "bg-red-500/10 text-[#FF3B30] border border-red-500/20",
+        "trusted": "bg-green-500/10 text-[#34C759] border border-green-500/20",
+        "unknown": "bg-orange-500/10 text-[#FF9500] border border-orange-500/20"
+      }
+    },
+    "inputs": {
+      "classes": "bg-[#0A0A0A] border border-[#27272A] text-white rounded-sm focus:ring-1 focus:ring-[#007AFF] focus:border-[#007AFF] font-mono text-sm"
+    },
+    "navigation": {
+      "style": "Compact left sidebar or highly dense top navigation with glassmorphism (bg-[#0A0A0A]/80 backdrop-blur-xl border-b border-[#27272A])."
+    }
+  },
+  "motion_and_interactions": {
+    "philosophy": "Minimalist, mechanical, and precise. No bouncy animations.",
+    "hover": "Instant color swaps or subtle border highlights (150ms ease-in-out).",
+    "live_indicators": "Blinking opacity animation (pulse) for 'LIVE' badges or recording dots.",
+    "page_transitions": "Fade-in with a very slight upward slide (duration: 200ms)."
+  },
+  "media_and_assets": {
+    "icons": {
+      "library": "@phosphor-icons/react",
+      "style": "Regular or Bold weight, sharp geometry to match the tactical theme."
+    },
+    "images": {
+      "camera_feeds": [
+        {
+          "url": "https://images.unsplash.com/photo-1549109926-58f039549485?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxob21lJTIwZXh0ZXJpb3IlMjBzZWN1cml0eSUyMGNhbWVyYSUyMHZpZXd8ZW58MHx8fHwxNzgzNTA4OTExfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Front Porch Cam"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1589935447067-5531094415d1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwyfHxob21lJTIwZXh0ZXJpb3IlMjBzZWN1cml0eSUyMGNhbWVyYSUyMHZpZXd8ZW58MHx8fHwxNzgzNTA4OTExfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Driveway Cam"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1585206031650-9e9a7c87dcfe?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwzfHxob21lJTIwZXh0ZXJpb3IlMjBzZWN1cml0eSUyMGNhbWVyYSUyMHZpZXd8ZW58MHx8fHwxNzgzNTA4OTExfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Backyard Cam"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1590613607026-15c463e30ca5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHw0fHxob21lJTIwZXh0ZXJpb3IlMjBzZWN1cml0eSUyMGNhbWVyYSUyMHZpZXd8ZW58MHx8fHwxNzgzNTA4OTExfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Garage Cam"
+        }
+      ],
+      "people": [
+        {
+          "url": "https://images.unsplash.com/photo-1587397845856-e6cf49176c70?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHw0fHxwZXJzb24lMjBwb3J0cmFpdCUyMGxvb2tpbmclMjBhdCUyMGNhbWVyYXxlbnwwfHx8fDE3ODM1MDg5MTF8MA&ixlib=rb-4.1.0&q=85",
+          "description": "Unknown Suspect / Detected Person"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1506863530036-1efeddceb993?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwyfHxwZXJzb24lMjBwb3J0cmFpdCUyMGxvb2tpbmclMjBhdCUyMGNhbWVyYXxlbnwwfHx8fDE3ODM1MDg5MTF8MA&ixlib=rb-4.1.0&q=85",
+          "description": "Trusted Person (Jane)"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwxfHxwZXJzb24lMjBwb3J0cmFpdCUyMGxvb2tpbmclMjBhdCUyMGNhbWVyYXxlbnwwfHx8fDE3ODM1MDg5MTF8MA&ixlib=rb-4.1.0&q=85",
+          "description": "Trusted Person (Mark)"
+        }
+      ],
+      "events": [
+        {
+          "url": "https://images.unsplash.com/photo-1691517534724-3732c7621407?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NDh8MHwxfHNlYXJjaHwyfHxwYWNrYWdlJTIwYXQlMjBmcm9udCUyMGRvb3J8ZW58MHx8fHwxNzgzNTA4OTExfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Package Delivery Event"
+        }
+      ]
+    }
+  },
+  "testing": {
+    "attributes": "All interactive and key informational elements MUST include a `data-testid` attribute (e.g., `data-testid=\"live-feed-camera-1\"`)."
+  },
+  "instructions_to_main_agent": [
+    "Use Phosphor Icons (@phosphor-icons/react) for all icons to match the tactical, crisp feel.",
+    "Implement 'The Control Room Grid' for the main dashboard: a high-density bento grid where every pixel is utilized. No gaping white/black spaces between widgets.",
+    "Do NOT use soft shadows. Rely on 1px solid borders (border-[#27272A]) to separate elements.",
+    "Use JetBrains Mono for timestamps, metric numbers, and confidence scores (e.g., 'CONFIDENCE: 98%').",
+    "For the Sentinel AI chat, use the Volt Blue (#007AFF) for the AI's messages/accents to distinguish it from standard system alerts.",
+    "Ensure the layout is responsive but prioritizes a dense data view on large screens.",
+    "All cards/widgets should have `rounded-sm` or `rounded-none`, avoiding modern rounded UI bubbles.",
+    "Add 'data-testid' to every button, link, and interactive widget."
+  ]
+}
