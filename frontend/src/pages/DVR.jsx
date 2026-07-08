@@ -18,7 +18,7 @@ export default function DVR() {
     const params = {};
     if (f.camera_id) params.camera_id = f.camera_id;
     if (f.search) params.search = f.search;
-    getSegments(params).then((s) => { setSegments(s); if (s.length && !selected) setSelected(s[0]); });
+    getSegments(params).then((s) => { setSegments(s); setSelected((cur) => cur || (s.length ? s[0] : cur)); });
   }, [f]);
 
   const setSegLen = async (n) => { const s = await updateSettings({ dvr_segment_minutes: n }); setSettings(s); toast.success(`Segment length: ${n} min (applies to new recordings)`); };

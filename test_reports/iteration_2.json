@@ -1,0 +1,31 @@
+{
+  "summary": "Frontend regression testing of DVR page after the useEffect exhaustive-deps fix. DVR loads, auto-selects first segment, segment click updates Playback, search filter works, seg-length + retention toasts work. Regression confirmed on camera-filter behavior: when the filter excludes the currently-selected segment, the Playback panel does NOT switch to a segment in the filtered set — it retains the stale selection (see RCA). Smoke tests on Dashboard, Sentinel AI (grounded Gemini answer received), and Event Log passed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "DVR / Playback panel",
+        "issue": "Camera filter regression: after switching camera filter to a camera that does NOT contain the currently-selected segment, the Playback panel keeps showing the previously-selected (now filtered-out) segment. Header still shows 'Front Porch' while Segments list shows only Backyard (1). Requirement was 'previously-selected segment retained if still present, otherwise selection updates'.",
+        "selector": "[data-testid=\"dvr-player\"] / [data-testid=\"dvr-camera-filter\"]",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_2.json"],
+  "action_items": [
+    "Fix DVR.jsx line 21 auto-select logic. Current: setSelected((cur) => cur || (s.length ? s[0] : cur)). This never updates once set, so filter changes leak a stale selection. Replace with membership-aware update, e.g.: setSelected((cur) => (cur && s.some(x => x.id === cur.id)) ? cur : (s.length ? s[0] : null));"
+  ],
+  "critical_code_review_comments": [
+    "DVR.jsx: The functional updater setSelected((cur) => cur || (s.length ? s[0] : cur)) satisfies the exhaustive-deps lint but breaks selection-follows-filter behavior. Must check whether cur is still in filtered list s.",
+    "DVR.jsx: When s is empty after a filter/search, selection is not cleared to null — the Playback panel still shows the old segment though 'NO SEGMENTS' would be more appropriate."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (per request)", "frontend": "83% (5/6 DVR checks pass; camera-filter selection retention fails)"},
+  "seed_data_creation": "None. Prior TEST_ seed segment (TEST_PI seg) from iteration_1 still visible.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Only the DVR camera-filter selection sync path needs re-verification. Reproduce by: load /dvr, wait for first Front Porch segment auto-selected, choose 'Backyard' in dvr-camera-filter, then confirm Playback header + summary switch to the Backyard segment (not the stale Front Porch one). Sentinel AI takes ~15-20s for Gemini reply, plan waits accordingly.",
+  "rca of the issue": "Root cause: the exhaustive-deps fix replaced the previous unconditional setSelected(s[0]) with setSelected((cur) => cur || (s.length ? s[0] : cur)). This updater only assigns when cur is falsy, so once a segment is selected on initial load, subsequent filter/search changes never reassign selection even if the previous segment is filtered out. Reproduction: navigate to /dvr (Front Porch segment auto-selected) -> pick 'Backyard' in dvr-camera-filter -> Segments list shows only the single Backyard segment, but the Playback panel and header still show the Front Porch segment. Mitigation: change to membership-aware updater as noted in action_items."
+}
