@@ -8,7 +8,8 @@ The browser only ever calls /api/* on this backend (same origin) — never the P
 See PI_INTEGRATION.md for the pull contract the Pi service must expose.
 """
 from fastapi import FastAPI, APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -386,6 +387,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------- Serve the built frontend (Pi LAN same-origin on :8080) ----------------
+# Only active when a production build exists (i.e. on the Pi after `yarn build`).
+# In the Emergent preview the frontend is served separately, so this is skipped.
+FRONTEND_BUILD = ROOT_DIR.parent / "frontend" / "build"
+if FRONTEND_BUILD.is_dir():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_BUILD / "static")), name="static")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        candidate = FRONTEND_BUILD / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(FRONTEND_BUILD / "index.html"))
+
+    logger.info(f"Serving frontend build from {FRONTEND_BUILD}")
 
 
 @app.on_event("shutdown")
