@@ -1,8 +1,13 @@
 import axios from "axios";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// Same-origin by default (Pi LAN: served on :8080, calls relative /api). In the Emergent
+// preview REACT_APP_BACKEND_URL is set and used; on the Pi build it is empty -> relative.
+export const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
+const API = `${API_BASE}/api`;
 
 export const api = axios.create({ baseURL: API });
+
+export const streamUrl = (camera) => `${API}/pi/stream${camera ? `?camera=${encodeURIComponent(camera)}` : ""}`;
 
 export const getHealth = () => api.get("/system/health").then((r) => r.data);
 export const getSettings = () => api.get("/settings").then((r) => r.data);

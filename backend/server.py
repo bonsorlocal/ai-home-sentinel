@@ -1,11 +1,14 @@
-"""AI Home Sentinel — FastAPI backend.
-- App-facing REST API for all 8 pages.
-- Pi Integration contract (/api/pi/*) so the existing Cursor/Python/Picamera2/face_recognition
-  agent can POST real detections, events, DVR segments and health. Real data (is_demo=False)
-  mixes in with the labeled demo data automatically.
-See PI_INTEGRATION.md for the full contract.
+"""AI Home Sentinel — FastAPI backend (LAN / Pi live-data mode).
+
+Runs ON the Raspberry Pi (port 8080) and PROXIES the Pi-local Sentinel camera stack
+(Flask at PI_BASE_URL, default http://127.0.0.1:5000). Live-data-first:
+- /status is health-checked; when the Pi is up we serve ONLY real camera/events/DVR/health.
+- When the Pi is down we return an explicit offline state (never demo/mock content).
+The browser only ever calls /api/* on this backend (same origin) — never the Pi directly.
+See PI_INTEGRATION.md for the pull contract the Pi service must expose.
 """
 from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,7 +26,7 @@ from models import (
     DVRSegment, DVRSegmentCreate, Rule, RuleCreate, RuleUpdate,
     Settings, SettingsUpdate, Heartbeat, ChatRequest,
 )
-import seed as seed_module
+import pi_client
 import sentinel_ai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -39,18 +42,18 @@ api = APIRouter(prefix="/api")
 NO_ID = {"_id": 0}
 
 
-# ---------------- Startup: seed demo data if empty ----------------
+# ---------------- Startup: live-data mode (NO demo seeding) ----------------
 @app.on_event("startup")
-async def seed_if_empty():
-    if await db.settings.count_documents({}) == 0:
-        data = seed_module.build_seed()
-        await db.cameras.insert_many(data["cameras"])
-        await db.people.insert_many(data["people"])
-        await db.events.insert_many(data["events"])
-        await db.dvr_segments.insert_many(data["segments"])
-        await db.rules.insert_many(data["rules"])
-        await db.settings.insert_one(data["settings"])
-        logger.info("Seeded demo data.")
+async def startup():
+    # Ensure a settings/config doc exists (app config, not mock content).
+    if await db.settings.count_documents({"id": "system"}) == 0:
+        await db.settings.insert_one(Settings().model_dump())
+    # Purge any previously-seeded demo/mock records so LAN mode shows ONLY live Pi data.
+    for coll in ("cameras", "events", "dvr_segments", "people", "rules"):
+        res = await db[coll].delete_many({"is_demo": True})
+        if res.deleted_count:
+            logger.info(f"Removed {res.deleted_count} demo records from {coll}.")
+    logger.info(f"Live-data mode. Pi stack: {pi_client.PI_BASE_URL}")
 
 
 @api.get("/")
@@ -77,121 +80,155 @@ async def update_settings(patch: SettingsUpdate):
     return Settings(**s)
 
 
-HEARTBEAT_TTL_SECONDS = 30  # Pi is considered offline if no heartbeat within this window
+HEARTBEAT_TTL_SECONDS = 30  # (legacy push contract) still supported for Pi-push agents
 
 
 @api.get("/system/health")
 async def system_health():
-    hb = await db.system_health.find_one({"id": "latest"}, NO_ID)
-    cams_online = await db.cameras.count_documents({"status": "online"})
-    cams_total = await db.cameras.count_documents({})
+    """Live-data-first: reflect the real Pi /status. Never returns demo metrics."""
     settings = await db.settings.find_one({"id": "system"}, NO_ID) or {}
-    pi_connected = False
-    if hb and hb.get("received_at"):
-        try:
-            last = datetime.fromisoformat(hb["received_at"])
-            age = (datetime.now(timezone.utc) - last).total_seconds()
-            pi_connected = age <= HEARTBEAT_TTL_SECONDS
-        except ValueError:
-            pi_connected = False
-    if not pi_connected:
-        # No Pi heartbeat yet -> labeled demo/simulated metrics.
-        hb = {"cpu_percent": 34.0, "temp_c": 52.4, "memory_percent": 61.0,
-              "disk_percent": 47.0, "uptime_seconds": 187200, "cameras_online": cams_online}
+    online, raw = await pi_client.check_status()
+    if not online:
+        return {
+            "pi_connected": False,
+            "is_demo": False,
+            "offline": True,
+            "pi_base_url": pi_client.PI_BASE_URL,
+            "cameras_online": 0,
+            "cameras_total": 0,
+            "processing_mode": settings.get("processing_mode", "hybrid"),
+            "mode": settings.get("mode", "home"),
+            "metrics": None,
+        }
+    norm = pi_client.normalize_status(raw)
     return {
-        "pi_connected": pi_connected,
-        "is_demo": not pi_connected,
-        "cameras_online": cams_online,
-        "cameras_total": cams_total,
-        "processing_mode": settings.get("processing_mode", "hybrid"),
-        "mode": settings.get("mode", "home"),
-        "metrics": hb,
+        "pi_connected": True,
+        "is_demo": False,
+        "offline": False,
+        "pi_base_url": pi_client.PI_BASE_URL,
+        "cameras_online": norm["cameras_online"],
+        "cameras_total": norm["cameras_total"],
+        "processing_mode": norm["processing_mode"] or settings.get("processing_mode", "hybrid"),
+        "mode": norm["mode"] or settings.get("mode", "home"),
+        "metrics": norm["metrics"],
+        "raw_status": raw,
     }
 
 
-# ---------------- Cameras ----------------
-@api.get("/cameras", response_model=List[Camera])
+# ---------------- Live camera stream proxy (browser -> backend -> Pi) ----------------
+@api.get("/pi/status")
+async def pi_status_proxy():
+    online, raw = await pi_client.check_status()
+    if not online:
+        raise HTTPException(503, "Pi Sentinel stack offline")
+    return raw
+
+
+@api.get("/pi/stream")
+async def pi_stream_proxy(camera: Optional[str] = None):
+    """Proxy the Pi MJPEG feed so the browser stays same-origin (never hits the Pi/LAN)."""
+    path = "/video_feed" + (f"?camera={camera}" if camera else "")
+    try:
+        generator, content_type = await pi_client.open_stream(path)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Stream proxy failed: {e}")
+        raise HTTPException(503, "Camera stream unavailable — Pi offline")
+    return StreamingResponse(generator(), media_type=content_type,
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------------- Cameras (live from Pi /status) ----------------
+@api.get("/cameras")
 async def list_cameras():
-    docs = await db.cameras.find({}, NO_ID).to_list(100)
-    return [Camera(**d) for d in docs]
+    online, raw = await pi_client.check_status()
+    if not online:
+        return []
+    return pi_client.normalize_status(raw)["cameras"]
 
 
-# ---------------- Events (Live + Event Log) ----------------
-@api.get("/events", response_model=List[Event])
+# ---------------- Events (Live + Event Log) — proxied from Pi ----------------
+def _match(ev, saved, camera_id, type, person_id, known, search):
+    if saved is not None and bool(ev.get("saved")) != saved:
+        return False
+    if camera_id and ev.get("camera_id") != camera_id:
+        return False
+    if type and ev.get("type") != type:
+        return False
+    if person_id and ev.get("person_id") != person_id:
+        return False
+    if known is not None and bool(ev.get("known")) != known:
+        return False
+    if search:
+        blob = " ".join(str(ev.get(k, "")) for k in
+                        ("ai_summary", "ai_interpretation", "person_name", "camera_name", "type"))
+        blob += " " + " ".join(map(str, ev.get("tags", []) or [])) + " " + " ".join(map(str, ev.get("objects", []) or []))
+        if search.lower() not in blob.lower():
+            return False
+    return True
+
+
+@api.get("/events")
 async def list_events(
     saved: Optional[bool] = None, camera_id: Optional[str] = None,
     type: Optional[str] = None, person_id: Optional[str] = None,
     known: Optional[bool] = None, search: Optional[str] = None, limit: int = 100,
 ):
-    q = {}
-    if saved is not None:
-        q["saved"] = saved
-    if camera_id:
-        q["camera_id"] = camera_id
-    if type:
-        q["type"] = type
-    if person_id:
-        q["person_id"] = person_id
-    if known is not None:
-        q["known"] = known
-    if search:
-        rx = {"$regex": search, "$options": "i"}
-        q["$or"] = [{"ai_summary": rx}, {"ai_interpretation": rx}, {"person_name": rx},
-                    {"tags": rx}, {"objects": rx}, {"camera_name": rx}, {"type": rx}]
-    docs = await db.events.find(q, NO_ID).sort("timestamp", -1).to_list(limit)
-    return [Event(**d) for d in docs]
+    data = pi_client.as_list(await pi_client.get_json("/api/events"), "events")
+    if data is None:
+        return []
+    events = [e for e in data if _match(e, saved, camera_id, type, person_id, known, search)]
+    events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    return events[:limit]
 
 
-@api.get("/events/{event_id}", response_model=Event)
+@api.get("/events/{event_id}")
 async def get_event(event_id: str):
-    d = await db.events.find_one({"id": event_id}, NO_ID)
-    if not d:
-        raise HTTPException(404, "Event not found")
-    return Event(**d)
+    data = pi_client.as_list(await pi_client.get_json("/api/events"), "events") or []
+    for e in data:
+        if e.get("id") == event_id:
+            return e
+    raise HTTPException(404, "Event not found (Pi offline or unknown id)")
 
 
-@api.post("/events", response_model=Event)
-async def create_event(payload: EventCreate):
-    data = payload.model_dump()
-    if not data.get("timestamp"):
-        data["timestamp"] = datetime.now(timezone.utc).isoformat()
-    ev = Event(**data)
-    await db.events.insert_one(ev.model_dump())
-    return ev
-
-
-@api.patch("/events/{event_id}/save", response_model=Event)
+@api.patch("/events/{event_id}/save")
 async def toggle_save(event_id: str, saved: bool = True):
-    await db.events.update_one({"id": event_id}, {"$set": {"saved": saved}})
-    d = await db.events.find_one({"id": event_id}, NO_ID)
-    if not d:
-        raise HTTPException(404, "Event not found")
-    return Event(**d)
+    """Promote/demote an event in the Event Log — forwarded to the Pi."""
+    res = await pi_client.get_json(f"/api/events/{event_id}/save?saved={str(saved).lower()}")
+    if res is None:
+        raise HTTPException(503, "Pi offline — cannot update event")
+    return res
 
 
-# ---------------- DVR ----------------
-@api.get("/dvr/segments", response_model=List[DVRSegment])
+# ---------------- DVR (proxied from Pi) ----------------
+@api.get("/dvr/segments")
 async def list_segments(camera_id: Optional[str] = None, search: Optional[str] = None, limit: int = 200):
-    q = {}
+    data = pi_client.as_list(await pi_client.get_json("/api/dvr/segments"), "segments")
+    if data is None:
+        return []
+    segs = data
     if camera_id:
-        q["camera_id"] = camera_id
+        segs = [s for s in segs if s.get("camera_id") == camera_id]
     if search:
-        rx = {"$regex": search, "$options": "i"}
-        q["$or"] = [{"ai_summary": rx}, {"tags": rx}, {"people": rx}, {"objects": rx}, {"camera_name": rx}]
-    docs = await db.dvr_segments.find(q, NO_ID).sort("start_time", -1).to_list(limit)
-    return [DVRSegment(**d) for d in docs]
-
-
-@api.post("/dvr/segments", response_model=DVRSegment)
-async def create_segment(payload: DVRSegmentCreate):
-    seg = DVRSegment(**payload.model_dump())
-    await db.dvr_segments.insert_one(seg.model_dump())
-    return seg
+        sl = search.lower()
+        def hit(s):
+            blob = " ".join([str(s.get("ai_summary", "")), str(s.get("camera_name", "")),
+                             " ".join(map(str, s.get("tags", []) or [])),
+                             " ".join(map(str, s.get("people", []) or [])),
+                             " ".join(map(str, s.get("objects", []) or []))])
+            return sl in blob.lower()
+        segs = [s for s in segs if hit(s)]
+    segs.sort(key=lambda s: s.get("start_time", ""), reverse=True)
+    return segs[:limit]
 
 
 # ---------------- People ----------------
-@api.get("/people", response_model=List[Person])
+@api.get("/people")
 async def list_people():
+    """People/encodings come from the Pi face_recognition backend when available."""
+    data = pi_client.as_list(await pi_client.get_json("/api/people"), "people")
+    if data is not None:
+        return data
+    # Pi has no people endpoint or is offline -> app-managed (non-demo) store.
     docs = await db.people.find({}, NO_ID).sort("created_at", -1).to_list(200)
     return [Person(**d) for d in docs]
 
@@ -253,21 +290,27 @@ async def delete_rule(rule_id: str):
     return {"deleted": rule_id}
 
 
-# ---------------- Sentinel AI ----------------
+# ---------------- Sentinel AI (grounded in LIVE Pi data) ----------------
 @api.post("/assistant/chat")
 async def assistant_chat(req: ChatRequest):
-    events = await db.events.find({}, NO_ID).sort("timestamp", -1).to_list(300)
-    segments = await db.dvr_segments.find({}, NO_ID).sort("start_time", -1).to_list(300)
-    people = await db.people.find({}, NO_ID).to_list(200)
-    cameras = await db.cameras.find({}, NO_ID).to_list(100)
+    online, raw = await pi_client.check_status()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.chat.insert_one({"session_id": req.session_id, "role": "user", "content": req.message, "timestamp": now})
+    if not online:
+        msg = ("⚠️ The Pi Sentinel stack is offline, so I have no live data to reason over. "
+               "Please bring the Pi camera service online and try again.")
+        await db.chat.insert_one({"session_id": req.session_id, "role": "assistant", "content": msg,
+                                  "sources": [], "offline": True, "timestamp": datetime.now(timezone.utc).isoformat()})
+        return {"answer": msg, "sources": [], "offline": True}
+
+    events = pi_client.as_list(await pi_client.get_json("/api/events"), "events") or []
+    segments = pi_client.as_list(await pi_client.get_json("/api/dvr/segments"), "segments") or []
+    people = pi_client.as_list(await pi_client.get_json("/api/people"), "people") or []
+    cameras = pi_client.normalize_status(raw)["cameras"]
     rules = await db.rules.find({}, NO_ID).to_list(200)
     settings = await db.settings.find_one({"id": "system"}, NO_ID) or {}
 
     context, sources = sentinel_ai.build_context(req.message, events, segments, people, cameras, rules, settings)
-
-    # persist user turn
-    now = datetime.now(timezone.utc).isoformat()
-    await db.chat.insert_one({"session_id": req.session_id, "role": "user", "content": req.message, "timestamp": now})
     try:
         answer = await sentinel_ai.ask_sentinel(req.session_id, req.message, context)
     except Exception as e:

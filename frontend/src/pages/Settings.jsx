@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { getSettings, updateSettings, getHealth } from "@/lib/api";
-import { Panel, PanelHeader, DemoTag } from "@/components/common";
+import { Panel, PanelHeader } from "@/components/common";
 import { GearSix, Cpu, ShieldCheck, Microphone, Database, HardDrives, Thermometer, VideoCamera } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -76,15 +76,17 @@ export default function Settings() {
       </Panel>
 
       <Panel>
-        <PanelHeader title="Device & API Health" icon={GearSix} right={health?.is_demo && <DemoTag />} />
+        <PanelHeader title="Device & API Health" icon={GearSix} right={<span className={`micro-label ${health?.pi_connected ? "" : "text-[#FF3B30]"}`}>{health?.pi_connected ? "LIVE" : "OFFLINE"}</span>} />
         <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
           <HealthCard icon={VideoCamera} label="Pi Agent" value={health?.pi_connected ? "LINKED" : "OFFLINE"} good={health?.pi_connected} />
-          <HealthCard icon={Cpu} label="CPU" value={`${m.cpu_percent}%`} />
-          <HealthCard icon={Thermometer} label="Temp" value={`${m.temp_c}°C`} />
-          <HealthCard icon={HardDrives} label="Disk" value={`${m.disk_percent}%`} />
+          <HealthCard icon={Cpu} label="CPU" value={m.cpu_percent != null ? `${m.cpu_percent}%` : "—"} />
+          <HealthCard icon={Thermometer} label="Temp" value={m.temp_c != null ? `${m.temp_c}°C` : "—"} />
+          <HealthCard icon={HardDrives} label="Disk" value={m.disk_percent != null ? `${m.disk_percent}%` : "—"} />
         </div>
         <div className="px-4 pb-4 micro-label">
-          {health?.pi_connected ? "Live metrics from Pi heartbeat." : "No Pi heartbeat received — metrics are simulated demo values. Connect your Pi agent via POST /api/pi/heartbeat."}
+          {health?.pi_connected
+            ? `Live metrics from the Pi at ${health?.pi_base_url}.`
+            : `Pi Sentinel stack offline${health?.pi_base_url ? ` at ${health.pi_base_url}` : ""} — no live metrics available.`}
         </div>
       </Panel>
     </div>

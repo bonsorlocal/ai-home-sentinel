@@ -1,0 +1,39 @@
+{
+  "summary": "Full end-to-end verification of Pi-LAN live-data-first reconfiguration. Backend proxy contract validated in LIVE and OFFLINE states; frontend Dashboard, Live Events and Sentinel AI all correctly reflect live Pi data with no demo artifacts, and show clean offline UI when mock Pi is stopped. Mock Pi left RUNNING at end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:22 uses os.environ['MONGO_URL']/'DB_NAME'—correctly fails fast; PI_BASE_URL from env in pi_client.py with sensible timeouts.",
+    "system_health returns explicit offline shape with metrics=None (no fabricated demo values) matching spec.",
+    "pi/stream proxy correctly streams multipart/x-mixed-replace and 503s when Pi is down.",
+    "Startup purges is_demo=True records so LAN mode is truly live-only.",
+    "Frontend cam-stream-{id} src uses same-origin /api/pi/stream?camera=... — browser never contacts Pi directly."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (all live + offline assertions)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "backend_test.py must be run with -p no:xdist (or without pytest.ini parallel opts) because LIVE and OFFLINE test classes share state via the mock Pi process; running them in parallel causes cross-contamination. Mock Pi harness: start=`cd /app && nohup python tools/mock_pi.py >/tmp/mockpi.log 2>&1 &`, stop=`pkill -f mock_pi.py`. Verified data-testids present: pi-offline-banner, empty-state, cam-stream-picam0, cam-tile-picam0, live-event-live-1, live-event-live-2, chat-input, chat-send-btn. Demo tag (data-testid=demo-tag) does not exist anywhere.",
+  "verified_live_state": {
+    "health": "pi_connected=true, is_demo=false, offline=false, cpu 41.5, temp 55.2, cameras 2/2",
+    "events": "live-1 (Alex recognized) + live-2 (unknown_person) only; no ev-1..ev-7 or Jane Doe",
+    "cameras": "picam0 Picamera2, usb1 USB Cam",
+    "stream": "HTTP 200 multipart/x-mixed-replace",
+    "frontend": "LIVE badge, Pi LINKED, cam-stream-picam0 -> /api/pi/stream?camera=picam0, Alex + Unknown Person shown, 41.5%/55.2°C rendered, zero demo-tag",
+    "sentinel_ai": "Grounded answer with Alex context returned"
+  },
+  "verified_offline_state": {
+    "health": "pi_connected=false, offline=true, metrics=null",
+    "events": "[]",
+    "cameras": "[]",
+    "stream": "HTTP 503",
+    "assistant": "returns offline=true with '⚠️ ... offline ...' message",
+    "frontend": "pi-offline-banner + empty-state visible, SYSTEM HEALTH shows OFFLINE, no 41.5/34.0/Alex/Jane Doe/DEMO leakage"
+  }
+}

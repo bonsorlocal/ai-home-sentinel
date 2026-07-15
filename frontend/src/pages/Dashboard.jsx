@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getHealth, getCameras, getEvents, getSettings, updateSettings, askAssistant } from "@/lib/api";
-import { Panel, PanelHeader, LiveTag, DemoTag, TypePill, ImportanceBadge, fmtTime } from "@/components/common";
+import { getHealth, getCameras, getEvents, getSettings, updateSettings, askAssistant, streamUrl } from "@/lib/api";
+import { Panel, PanelHeader, LiveTag, OfflineBanner, EmptyState, TypePill, ImportanceBadge, fmtTime } from "@/components/common";
 import { Warning, Cpu, Thermometer, HardDrives, VideoCamera, PaperPlaneRight, House, Airplane, MoonStars } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -63,6 +63,9 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Pi offline banner */}
+      {health?.offline && <OfflineBanner piBaseUrl={health?.pi_base_url} />}
+
       {/* Unknown warning */}
       {unknown && (
         <Panel data-testid="unknown-warning" className="border-[#FF3B30]/40 bg-[#FF3B30]/5">
@@ -84,13 +87,17 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Live preview grid */}
         <Panel className="xl:col-span-2">
-          <PanelHeader title="Live Camera Preview" icon={VideoCamera} right={<div className="flex items-center gap-2"><LiveTag /><DemoTag /></div>} />
+          <PanelHeader title="Live Camera Preview" icon={VideoCamera} right={health?.pi_connected && <LiveTag />} />
+          {health?.offline || cameras.length === 0 ? (
+            <EmptyState label="No cameras reported by the Pi." online={health?.pi_connected} />
+          ) : (
           <div className="grid grid-cols-2 gap-px bg-[#27272A]">
             {cameras.map((c) => (
               <div key={c.id} data-testid={`cam-tile-${c.id}`} className="relative aspect-video bg-[#0A0A0A] scanline overflow-hidden group">
-                {c.thumbnail_url ? (
-                  <img src={c.thumbnail_url} alt={c.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                ) : <div className="w-full h-full flex items-center justify-center text-[#3F3F46]">NO SIGNAL</div>}
+                <img src={streamUrl(c.id)} alt={c.name} data-testid={`cam-stream-${c.id}`}
+                  className="w-full h-full object-cover"
+                  onError={(e) => { e.currentTarget.style.display = "none"; e.currentTarget.nextSibling.style.display = "flex"; }} />
+                <div className="w-full h-full items-center justify-center text-[#3F3F46] font-mono text-xs" style={{ display: "none" }}>STREAM UNAVAILABLE</div>
                 <div className="absolute top-2 left-2 flex items-center gap-2">
                   <span className="micro-label bg-black/60 px-1.5 py-0.5" style={{ color: "#fff" }}>{c.name}</span>
                 </div>
@@ -100,6 +107,7 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
+          )}
         </Panel>
 
         {/* Right column: status + assistant */}
@@ -115,11 +123,11 @@ export default function Dashboard() {
           </Panel>
 
           <Panel>
-            <PanelHeader title="System Health" icon={Cpu} right={health?.is_demo && <DemoTag />} />
+            <PanelHeader title="System Health" icon={Cpu} right={<span className={`micro-label ${health?.pi_connected ? "" : "text-[#FF3B30]"}`}>{health?.pi_connected ? "LIVE" : "OFFLINE"}</span>} />
             <div className="p-4 grid grid-cols-2 gap-3">
-              <Metric icon={Cpu} label="CPU" value={`${m.cpu_percent}%`} />
-              <Metric icon={Thermometer} label="Temp" value={`${m.temp_c}°C`} />
-              <Metric icon={HardDrives} label="Disk" value={`${m.disk_percent}%`} />
+              <Metric icon={Cpu} label="CPU" value={m.cpu_percent != null ? `${m.cpu_percent}%` : "—"} />
+              <Metric icon={Thermometer} label="Temp" value={m.temp_c != null ? `${m.temp_c}°C` : "—"} />
+              <Metric icon={HardDrives} label="Disk" value={m.disk_percent != null ? `${m.disk_percent}%` : "—"} />
               <Metric icon={VideoCamera} label="Pi" value={health?.pi_connected ? "LINKED" : "OFFLINE"} />
             </div>
           </Panel>

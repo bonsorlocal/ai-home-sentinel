@@ -37,10 +37,23 @@ export const ImportanceBadge = ({ level }) => {
   return <span className={`${badgeBase} ${map[level] || map.low}`}>{level}</span>;
 };
 
-export const DemoTag = () => (
-  <span data-testid="demo-tag" className={`${badgeBase} bg-purple-500/10 text-[#C084FC] border-purple-500/25`} title="Demo / mock data — will be replaced by real Pi data">
-    demo
-  </span>
+export const DemoTag = () => null; // demo data removed in Pi LAN mode
+
+export const OfflineBanner = ({ piBaseUrl }) => (
+  <div data-testid="pi-offline-banner" className="border border-[#FF3B30]/40 bg-[#FF3B30]/5 rounded-sm px-4 py-3 flex items-center gap-3">
+    <span className="w-2.5 h-2.5 rounded-full bg-[#FF3B30]" />
+    <div className="flex-1">
+      <div className="font-bold text-[#FF3B30]">PI OFFLINE</div>
+      <div className="text-sm text-[#A1A1AA]">No live Sentinel data. The Pi camera stack is unreachable{piBaseUrl ? ` at ${piBaseUrl}` : ""}. Live data will appear automatically once it's online.</div>
+    </div>
+  </div>
+);
+
+export const EmptyState = ({ label = "No live data", online = false }) => (
+  <div data-testid="empty-state" className="p-10 text-center">
+    <div className="micro-label mb-1" style={{ color: online ? "#71717A" : "#FF3B30" }}>{online ? "NO DATA YET" : "PI OFFLINE"}</div>
+    <div className="text-sm text-[#71717A]">{online ? label : "Bring the Pi camera stack online to see live data."}</div>
+  </div>
 );
 
 export const LiveTag = () => (
