@@ -1,0 +1,15 @@
+{
+  "summary": "Regression check after adding deploy_emergent_pi.sh (no app code changes). All 5 targeted backend endpoints pass against public URL with mock Pi at 127.0.0.1:5000.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_regression_iter6.py", "/app/test_reports/pytest/iter6.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": ["/app/backend/tests/test_regression_iter6.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Mock Pi (/app/tools/mock_pi.py) must be running on 127.0.0.1:5000. Regression suite at /app/backend/tests/test_regression_iter6.py covers root, system health, camera diagnostics, MJPEG stream, and live events (no demo/seed data).",
+  "rca of the issue": "N/A - regression passed"
+}
