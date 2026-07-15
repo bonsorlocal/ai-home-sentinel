@@ -13,6 +13,7 @@ Expected Pi endpoints (the contract the Pi service must expose):
   GET  /api/rules             -> JSON list of rules (optional)
 """
 import os
+import time
 import logging
 import httpx
 
@@ -117,3 +118,133 @@ def as_list(data, key):
     if isinstance(data, dict):
         return data.get(key, [])
     return []
+
+
+# ---------------------------------------------------------------------------
+# Camera video pipeline discovery + diagnostics
+# ---------------------------------------------------------------------------
+# The existing on-Pi camera process (Picamera2/OpenCV/Flask) OWNS the camera. We must
+# never open the camera device ourselves (only one process may control it) — we only
+# PROXY the existing MJPEG feed. PI_VIDEO_URL pins an exact feed; otherwise we probe.
+
+PI_VIDEO_URL = os.environ.get("PI_VIDEO_URL", "").strip()
+CAMERA_NAME = os.environ.get("PI_CAMERA_NAME", "Pi Camera")
+VIDEO_CANDIDATES = ["/video_feed", "/api/camera/stream", "/camera/stream", "/stream.mjpg",
+                    "/stream", "/mjpg", "/video", "/cam", "/camera"]
+
+_video_url_cache = {"url": None, "ts": 0.0}
+_video_ok_cache = {"ok": False, "ts": 0.0}
+_RESOLVE_TTL = 30.0
+_OK_TTL = 5.0
+
+
+async def _probe(url):
+    """Open `url` and read one chunk. Returns (ok, content_type)."""
+    try:
+        async with httpx.AsyncClient(timeout=STATUS_TIMEOUT) as c:
+            async with c.stream("GET", url) as r:
+                if r.status_code != 200:
+                    return False, None
+                ctype = r.headers.get("content-type", "")
+                async for chunk in r.aiter_raw():
+                    if chunk:
+                        return True, ctype
+                    break
+                return True, ctype
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"probe {url} failed: {e}")
+        return False, None
+
+
+async def resolve_video_url(force=False):
+    """Find a working MJPEG feed on the Pi (cached). Returns URL or None."""
+    now = time.time()
+    if not force and _video_url_cache["url"] and now - _video_url_cache["ts"] < _RESOLVE_TTL:
+        return _video_url_cache["url"]
+    if PI_VIDEO_URL:
+        _video_url_cache.update(url=PI_VIDEO_URL, ts=now)
+        return PI_VIDEO_URL
+    for path in VIDEO_CANDIDATES:
+        url = f"{PI_BASE_URL}{path}"
+        ok, _ = await _probe(url)
+        if ok:
+            logger.info(f"Resolved Pi camera feed: {url}")
+            _video_url_cache.update(url=url, ts=now)
+            return url
+    _video_url_cache.update(url=None, ts=now)
+    return None
+
+
+async def video_reachable():
+    """Fast, cached check of whether the camera feed is currently streaming."""
+    now = time.time()
+    if now - _video_ok_cache["ts"] < _OK_TTL:
+        return _video_ok_cache["ok"]
+    url = await resolve_video_url()
+    ok = (await _probe(url))[0] if url else False
+    _video_ok_cache.update(ok=ok, ts=now)
+    return ok
+
+
+async def open_video_stream():
+    """Open a long-lived proxy to the resolved MJPEG feed. Raises if none reachable."""
+    url = await resolve_video_url(force=True)
+    if not url:
+        raise RuntimeError(f"No reachable camera feed on the Pi (tried {VIDEO_CANDIDATES} on {PI_BASE_URL})")
+    client = httpx.AsyncClient(timeout=None)
+    req = client.build_request("GET", url)
+    resp = await client.send(req, stream=True)
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "multipart/x-mixed-replace; boundary=frame")
+
+    async def generator():
+        try:
+            async for chunk in resp.aiter_raw():
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    return generator, content_type
+
+
+async def diagnostics():
+    """Deep, on-demand check of the camera pipeline for the UI diagnostics panel."""
+    status_ok, status = await check_status()
+    video_url = await resolve_video_url(force=True)
+    stream_ok, ctype = (await _probe(video_url)) if video_url else (False, None)
+
+    camera_detected = None
+    if status_ok and isinstance(status, dict) and status.get("cameras"):
+        camera_detected = any(
+            (c.get("status", "online") == "online") if isinstance(c, dict) else True
+            for c in status["cameras"]
+        )
+    if camera_detected is None:
+        camera_detected = stream_ok
+
+    errors = []
+    if not status_ok:
+        errors.append(f"/status not reachable at {PI_BASE_URL} (optional; used for metrics/events).")
+    if not video_url:
+        errors.append(f"No MJPEG feed found — probed {VIDEO_CANDIDATES} on {PI_BASE_URL}. "
+                      "Set PI_VIDEO_URL to the exact feed if it uses a non-standard path.")
+    elif not stream_ok:
+        errors.append(f"Feed {video_url} did not return a frame.")
+
+    return {
+        "pi_base_url": PI_BASE_URL,
+        "video_url": video_url,
+        "camera_detected": bool(camera_detected),
+        "camera_service_running": bool(status_ok or stream_ok),
+        "status_endpoint_reachable": bool(status_ok),
+        "stream_endpoint_reachable": bool(stream_ok),
+        "frame_received": bool(stream_ok),
+        "stream_content_type": ctype,
+        "backend_connected_to_pipeline": bool(stream_ok),
+        "errors": errors,
+    }
+
+
+PI_CAMERA = {"id": "pi-camera", "name": CAMERA_NAME, "location": "", "status": "online",
+             "stream_url": None, "thumbnail_url": None, "is_demo": False}

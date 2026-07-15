@@ -86,29 +86,31 @@ HEARTBEAT_TTL_SECONDS = 30  # (legacy push contract) still supported for Pi-push
 
 @api.get("/system/health")
 async def system_health():
-    """Live-data-first: reflect the real Pi /status. Never returns demo metrics."""
+    """Live-data-first: reflect the real Pi. 'Connected' if /status OR the camera feed responds."""
     settings = await db.settings.find_one({"id": "system"}, NO_ID) or {}
     online, raw = await pi_client.check_status()
-    if not online:
+    video_ok = await pi_client.video_reachable()
+    if not (online or video_ok):
         return {
-            "pi_connected": False,
-            "is_demo": False,
-            "offline": True,
-            "pi_base_url": pi_client.PI_BASE_URL,
-            "cameras_online": 0,
-            "cameras_total": 0,
+            "pi_connected": False, "is_demo": False, "offline": True,
+            "pi_base_url": pi_client.PI_BASE_URL, "camera_online": False,
+            "cameras_online": 0, "cameras_total": 0,
             "processing_mode": settings.get("processing_mode", "hybrid"),
-            "mode": settings.get("mode", "home"),
-            "metrics": None,
+            "mode": settings.get("mode", "home"), "metrics": None,
         }
-    norm = pi_client.normalize_status(raw)
+    norm = pi_client.normalize_status(raw) if online else {
+        "cameras": [], "cameras_online": 0, "cameras_total": 0,
+        "mode": None, "processing_mode": None, "metrics": None,
+    }
+    cams = norm["cameras"]
+    if not cams and video_ok:
+        cams = [dict(pi_client.PI_CAMERA)]
     return {
-        "pi_connected": True,
-        "is_demo": False,
-        "offline": False,
+        "pi_connected": True, "is_demo": False, "offline": False,
         "pi_base_url": pi_client.PI_BASE_URL,
-        "cameras_online": norm["cameras_online"],
-        "cameras_total": norm["cameras_total"],
+        "camera_online": video_ok or norm["cameras_online"] > 0,
+        "cameras_online": len([c for c in cams if c.get("status") == "online"]),
+        "cameras_total": len(cams),
         "processing_mode": norm["processing_mode"] or settings.get("processing_mode", "hybrid"),
         "mode": norm["mode"] or settings.get("mode", "home"),
         "metrics": norm["metrics"],
@@ -117,34 +119,49 @@ async def system_health():
 
 
 # ---------------- Live camera stream proxy (browser -> backend -> Pi) ----------------
-@api.get("/pi/status")
-async def pi_status_proxy():
-    online, raw = await pi_client.check_status()
-    if not online:
-        raise HTTPException(503, "Pi Sentinel stack offline")
-    return raw
-
-
-@api.get("/pi/stream")
-async def pi_stream_proxy(camera: Optional[str] = None):
-    """Proxy the Pi MJPEG feed so the browser stays same-origin (never hits the Pi/LAN)."""
-    path = "/video_feed" + (f"?camera={camera}" if camera else "")
+async def _camera_stream_response():
     try:
-        generator, content_type = await pi_client.open_stream(path)
+        generator, content_type = await pi_client.open_video_stream()
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Stream proxy failed: {e}")
-        raise HTTPException(503, "Camera stream unavailable — Pi offline")
+        logger.warning(f"Camera stream proxy failed: {e}")
+        raise HTTPException(503, "Camera stream unavailable — Pi camera pipeline unreachable")
     return StreamingResponse(generator(), media_type=content_type,
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-# ---------------- Cameras (live from Pi /status) ----------------
+@api.get("/camera/stream")
+async def camera_stream(camera: Optional[str] = None):
+    """Preferred same-origin route for the live Pi camera (proxies the existing MJPEG feed)."""
+    return await _camera_stream_response()
+
+
+@api.get("/pi/stream")
+async def pi_stream_proxy(camera: Optional[str] = None):
+    return await _camera_stream_response()
+
+
+@api.get("/camera/diagnostics")
+async def camera_diagnostics():
+    """Reports camera device / service / stream / frame reachability for the UI."""
+    return await pi_client.diagnostics()
+
+
+@api.get("/pi/status")
+async def pi_status_proxy():
+    online, raw = await pi_client.check_status()
+    if not online:
+        raise HTTPException(503, "Pi /status offline")
+    return raw
+
+
+# ---------------- Cameras (live from Pi /status, or the resolved feed) ----------------
 @api.get("/cameras")
 async def list_cameras():
     online, raw = await pi_client.check_status()
-    if not online:
-        return []
-    return pi_client.normalize_status(raw)["cameras"]
+    cams = pi_client.normalize_status(raw)["cameras"] if online else []
+    if not cams and await pi_client.video_reachable():
+        cams = [dict(pi_client.PI_CAMERA)]
+    return cams
 
 
 # ---------------- Events (Live + Event Log) — proxied from Pi ----------------

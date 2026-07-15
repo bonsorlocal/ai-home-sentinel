@@ -16,8 +16,11 @@ param(
   [string]$BindHost = "0.0.0.0",
   [string]$HostIp = "192.168.1.244",
   [string]$PiBaseUrl = "http://127.0.0.1:5000",
+  [string]$PiVideoUrl = "",
+  [string]$CameraName = "Pi Camera",
   [switch]$SkipBuild,
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [switch]$InstallService
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,8 +56,36 @@ if (-not (Test-Path $envFile)) {
 }
 Set-EnvVar $envFile "PI_BASE_URL" $PiBaseUrl
 Set-EnvVar $envFile "EMERGENT_BACKEND_PUBLIC_URL" $PublicUrl
+Set-EnvVar $envFile "PI_CAMERA_NAME" $CameraName
+if ($PiVideoUrl) { Set-EnvVar $envFile "PI_VIDEO_URL" $PiVideoUrl }
 if (-not (Select-String -Path $envFile -Pattern "^EMERGENT_LLM_KEY=" -Quiet)) {
   Warn "EMERGENT_LLM_KEY is not set in backend/.env — the Sentinel AI chat will not work until you add it."
+}
+
+# Optional: install/refresh the systemd unit so the app survives reboot ------
+if ($InstallService) {
+  Info "Installing systemd unit emergent-app.service"
+  $unit = @"
+[Unit]
+Description=AI Home Sentinel (Emergent) web app
+After=network-online.target mongod.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$Backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env python3 -m uvicorn server:app --host $BindHost --port $Port
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"@
+  $unit | sudo tee /etc/systemd/system/emergent-app.service > /dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable emergent-app.service
+  Info "Building frontend before (re)starting the service..."
 }
 
 # 2) Backend dependencies -----------------------------------------------------
@@ -80,12 +111,22 @@ if (-not (Test-Path (Join-Path $Frontend "build/index.html"))) {
 }
 
 # 4) Launch backend (serves API + built frontend) -----------------------------
-Info "Starting AI Home Sentinel on $PublicUrl  (Pi stack: $PiBaseUrl)"
-Info "Open $PublicUrl in a LAN browser. Ctrl+C to stop."
-Push-Location $Backend
-try {
-  python3 -m uvicorn server:app --host $BindHost --port $Port
+if ($InstallService) {
+  Info "Starting via systemd: emergent-app.service"
+  sudo systemctl restart emergent-app.service
+  Start-Sleep -Seconds 2
+  sudo systemctl status emergent-app.service --no-pager -l | Select-Object -First 12
+  Info "Service is managed by systemd (auto-starts on boot, restarts on crash)."
+  Info "Open $PublicUrl in a LAN browser."
 }
-finally {
-  Pop-Location
+else {
+  Info "Starting AI Home Sentinel on $PublicUrl  (Pi stack: $PiBaseUrl)"
+  Info "Open $PublicUrl in a LAN browser. Ctrl+C to stop. (Use -InstallService for a permanent systemd service.)"
+  Push-Location $Backend
+  try {
+    python3 -m uvicorn server:app --host $BindHost --port $Port
+  }
+  finally {
+    Pop-Location
+  }
 }

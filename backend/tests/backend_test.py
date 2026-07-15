@@ -49,6 +49,37 @@ def ensure_live_at_end():
 
 # ============== LIVE STATE ==============
 class TestLiveState:
+    def test_root(self):
+        r = requests.get(f"{BASE_URL}/api/", timeout=10)
+        assert r.status_code == 200
+        d = r.json()
+        assert d.get("service") == "AI Home Sentinel"
+        assert d.get("status") == "ok"
+
+    def test_camera_diagnostics_live(self):
+        r = requests.get(f"{BASE_URL}/api/camera/diagnostics", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["video_url"] == "http://127.0.0.1:5000/video_feed"
+        assert d["camera_detected"] is True
+        assert d["camera_service_running"] is True
+        assert d["status_endpoint_reachable"] is True
+        assert d["stream_endpoint_reachable"] is True
+        assert d["frame_received"] is True
+        assert d["errors"] == []
+
+    def test_camera_stream_live(self):
+        r = requests.get(f"{BASE_URL}/api/camera/stream", timeout=10, stream=True)
+        assert r.status_code == 200
+        ct = r.headers.get("content-type", "")
+        assert ct.startswith("multipart/x-mixed-replace")
+        r.close()
+
+    def test_health_camera_online(self):
+        r = requests.get(f"{BASE_URL}/api/system/health", timeout=10)
+        d = r.json()
+        assert d.get("camera_online") is True
+
     def test_health_live(self):
         r = requests.get(f"{BASE_URL}/api/system/health", timeout=10)
         assert r.status_code == 200
@@ -138,6 +169,24 @@ class TestOfflineState:
     def test_stream_offline(self):
         r = requests.get(f"{BASE_URL}/api/pi/stream", timeout=10)
         assert r.status_code == 503
+
+    def test_camera_stream_offline(self):
+        r = requests.get(f"{BASE_URL}/api/camera/stream", timeout=10)
+        assert r.status_code == 503
+
+    def test_camera_diagnostics_offline(self):
+        r = requests.get(f"{BASE_URL}/api/camera/diagnostics", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["camera_detected"] is False
+        assert d["stream_endpoint_reachable"] is False
+        assert d["frame_received"] is False
+        assert isinstance(d["errors"], list) and len(d["errors"]) > 0
+
+    def test_health_camera_offline(self):
+        r = requests.get(f"{BASE_URL}/api/system/health", timeout=10)
+        d = r.json()
+        assert d.get("camera_online") is False
 
     def test_assistant_offline(self):
         r = requests.post(

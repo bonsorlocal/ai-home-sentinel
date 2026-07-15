@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getEvents, saveEvent, getHealth } from "@/lib/api";
 import { Panel, PanelHeader, LiveTag, OfflineBanner, EmptyState, TypePill, ImportanceBadge, fmtTime } from "@/components/common";
+import { CameraLive } from "@/components/CameraLive";
 import { Broadcast, BookmarkSimple, FilmSlate } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -28,6 +29,8 @@ export default function LiveEvents() {
       </div>
 
       {health?.offline && <OfflineBanner piBaseUrl={health?.pi_base_url} />}
+
+      <CameraLive />
 
       <Panel>
         <PanelHeader title="Detection Feed" icon={Broadcast} />

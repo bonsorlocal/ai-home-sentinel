@@ -7,7 +7,9 @@ const API = `${API_BASE}/api`;
 
 export const api = axios.create({ baseURL: API });
 
-export const streamUrl = (camera) => `${API}/pi/stream${camera ? `?camera=${encodeURIComponent(camera)}` : ""}`;
+export const streamUrl = (camera) => `${API}/camera/stream${camera ? `?camera=${encodeURIComponent(camera)}` : ""}`;
+
+export const getDiagnostics = () => api.get("/camera/diagnostics").then((r) => r.data);
 
 export const getHealth = () => api.get("/system/health").then((r) => r.data);
 export const getSettings = () => api.get("/settings").then((r) => r.data);

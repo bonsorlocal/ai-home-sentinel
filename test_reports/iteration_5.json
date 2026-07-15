@@ -1,0 +1,40 @@
+{
+  "summary": "Verified live-data-first camera proxy + diagnostics contract. Added coverage for GET /api/, /api/camera/diagnostics, /api/camera/stream and system/health.camera_online in both LIVE and OFFLINE states. 17/17 backend tests pass. Frontend /live and / (Dashboard) render live stream via /api/camera/stream with diagnostics all OK; OFFLINE state renders pi-offline-banner + camera-stream-unavailable + diagnostics FAIL and empty-state; no demo-tag or Jane Doe/Front Porch/packages leakage. Mock Pi RESTARTED after offline test and is running at end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "pi_client.resolve_video_url probes 9 candidate paths — good discovery UX; PI_VIDEO_URL env override respected.",
+    "/api/camera/stream and /api/pi/stream share _camera_stream_response — single implementation, both return 503 on failure.",
+    "diagnostics() force-refreshes video URL every call — appropriate for on-demand UI panel; separate 5s cache used elsewhere.",
+    "camera_online in /system/health derives from video_reachable OR normalized cameras_online — resilient when /status returns no cameras array but MJPEG works.",
+    "CameraLive.jsx correctly uses same-origin streamUrl(); imgError -> camera-stream-unavailable data-testid renders as expected offline."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (live + offline assertions)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run backend tests with `-o addopts=''` to bypass pytest-xdist parallelism in /app/backend/pytest.ini (LIVE/OFFLINE share mock Pi process state). Mock Pi harness: start=`cd /app && setsid nohup python tools/mock_pi.py >/tmp/mockpi.log 2>&1 < /dev/null &`, stop=`pkill -f mock_pi.py` (wait 6s for 5s diagnostics cache). Live-verified testids: camera-live-panel, camera-stream-img (src=/api/camera/stream), camera-diagnostics, cam-stream-picam0, cam-stream-usb1, live-event-live-1, live-event-live-2. Offline-verified testids: pi-offline-banner, camera-stream-unavailable, empty-state. demo-tag testid is NEVER present.",
+  "verified_live_state": {
+    "root": "/api/ -> {service:'AI Home Sentinel', status:'ok'}",
+    "diagnostics": "video_url=http://127.0.0.1:5000/video_feed; camera_detected/service_running/status_reachable/stream_reachable/frame_received all true; errors=[]",
+    "camera_stream": "HTTP 200 multipart/x-mixed-replace",
+    "health": "pi_connected=true, offline=false, camera_online=true, is_demo=false, cameras 2/2",
+    "events": "live-1 (Alex) + live-2 (unknown_person); no ev-1..ev-7, no Jane Doe",
+    "frontend_live": "LIVE badge on page + camera panel; all 5 diagnostic checks OK; feed url shown; detection feed lists live-1 & live-2; NO demo-tag",
+    "frontend_dashboard": "2 cam-stream-* tiles srcs point to /api/camera/stream?camera=picam0|usb1; SYSTEM HEALTH shows LIVE / PI LINKED / 41.5% / 55.2°C; unknown person alert visible"
+  },
+  "verified_offline_state": {
+    "diagnostics": "camera_detected=false, stream_endpoint_reachable=false, frame_received=false, helpful errors[] listing probed paths",
+    "camera_stream": "HTTP 503",
+    "health": "pi_connected=false, offline=true, camera_online=false, metrics=null",
+    "events": "[]",
+    "frontend_offline": "pi-offline-banner + camera-stream-unavailable + empty-state visible; all 5 diagnostic Check rows show FAIL; no 41.5 / 55.2 / Alex / Jane Doe / demo-tag leakage"
+  },
+  "mock_pi_left_running": true
+}
