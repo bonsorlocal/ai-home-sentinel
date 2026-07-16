@@ -86,15 +86,30 @@ set_env PI_CAMERA_NAME "$CAMERA_NAME"
 [[ -n "$PI_VIDEO_URL" ]] && set_env PI_VIDEO_URL "$PI_VIDEO_URL"
 grep -qE "^EMERGENT_LLM_KEY=" "$ENV_FILE" || warn "EMERGENT_LLM_KEY not set — Sentinel AI chat will not work until you add it."
 
-# 2) Backend dependencies
+# 2) Backend dependencies (in a virtualenv — Debian/PEP 668 safe)
+VENV="$ROOT/.venv"
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
-  info "Installing backend Python dependencies"
-  python3 -m pip install --upgrade pip >/dev/null
-  python3 -m pip install -r "$BACKEND/requirements.txt"
+  info "Setting up Python virtualenv at .venv"
+  if ! python3 -m venv "$VENV" 2>/dev/null; then
+    warn "Installing python3-venv (needs sudo)"
+    sudo apt-get update -y
+    sudo apt-get install -y python3-venv python3-full
+    python3 -m venv "$VENV"
+  fi
+  "$VENV/bin/pip" install --upgrade pip >/dev/null
+  "$VENV/bin/pip" install -r "$BACKEND/requirements.txt"
 fi
+PY="$VENV/bin/python"
+[[ -x "$PY" ]] || PY="python3"
 
 # 3) Frontend build (relative /api => same origin on :PORT)
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  if ! command -v yarn >/dev/null 2>&1; then
+    warn "yarn/node not found — installing (needs sudo)"
+    sudo apt-get update -y
+    sudo apt-get install -y nodejs npm
+    sudo npm install -g yarn
+  fi
   info "Building frontend (REACT_APP_BACKEND_URL='' -> relative /api, same origin)"
   ( cd "$FRONTEND" && REACT_APP_BACKEND_URL="" yarn install --frozen-lockfile && REACT_APP_BACKEND_URL="" yarn build )
 fi
@@ -113,7 +128,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$BACKEND
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/env python3 -m uvicorn server:app --host $BIND_HOST --port $PORT
+ExecStart=$PY -m uvicorn server:app --host $BIND_HOST --port $PORT
 Restart=always
 RestartSec=3
 
@@ -128,5 +143,5 @@ UNIT
   info "Managed by systemd (auto-starts on boot). Open $PUBLIC_URL"
 else
   info "Starting on $PUBLIC_URL (Pi stack: $PI_BASE_URL). Ctrl+C to stop."
-  ( cd "$BACKEND" && exec python3 -m uvicorn server:app --host "$BIND_HOST" --port "$PORT" )
+  ( cd "$BACKEND" && exec "$PY" -m uvicorn server:app --host "$BIND_HOST" --port "$PORT" )
 fi
