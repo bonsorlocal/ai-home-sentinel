@@ -9,7 +9,9 @@
 /coverage
 
 # production
-/build
+# /build is intentionally COMMITTED so the Raspberry Pi can serve a pre-built UI
+# without needing node/yarn (see deploy_emergent_pi.sh --skip-build).
+!/build
 
 # misc
 .DS_Store
