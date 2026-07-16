@@ -108,6 +108,7 @@ class Reasoner:
             "night_hours": f"{self._night_start:02d}:00-{self._night_end:02d}:00",
             "repeat_person_window_minutes": self._repeat_window_minutes,
             "repeat_person_threshold": self._repeat_threshold,
+            "motion_precedes_seconds": self._motion_precedes_seconds,
         }
 
     # ------------------------------------------------------------------
@@ -145,6 +146,10 @@ class Reasoner:
                 # P3 - nighttime person
                 if self._is_night(ts):
                     return 2, 0.70
+
+                # Confidence bump when person detection is correlated with recent motion.
+                if self._recent_motion(recent, ts):
+                    return 1, 0.45
 
                 return 1, 0.40
 

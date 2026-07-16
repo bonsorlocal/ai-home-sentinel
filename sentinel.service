@@ -1,8 +1,10 @@
 [Unit]
 Description=AI Home Sentinel - security camera and AI brain
 Documentation=https://github.com/bonsorlocal/ai-home-sentinel
-After=network-online.target
+After=network-online.target systemd-udev-settle.service
 Wants=network-online.target
+# Give libcamera time to enumerate CSI cameras before we open Picamera2.
+ExecStartPre=/bin/sleep 15
 
 [Service]
 Type=simple

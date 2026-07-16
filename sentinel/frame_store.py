@@ -25,8 +25,9 @@ class FrameStore:
         self._stream_count: int = 0
         self._updated_at: float = 0.0
         self._stale_after = float(stale_after_seconds)
-        # Keep a small rolling history so clip capture can include pre-roll frames.
-        self._history = deque(maxlen=240)
+        # Keep a short rolling history for clip pre-roll (not hundreds of
+        # full-res frames — that stalls the capture loop on a Pi).
+        self._history = deque(maxlen=90)
 
     def update(self, frame, stream_jpeg: Optional[bytes] = None) -> None:
         """Store a raw capture; optionally publish a new browser stream frame."""
@@ -45,6 +46,13 @@ class FrameStore:
         with self._condition:
             return self._jpeg
 
+    def get_stream(self) -> Optional[Tuple[bytes, int]]:
+        """Return the freshest browser JPEG and its sequence number."""
+        with self._condition:
+            if self._jpeg is None:
+                return None
+            return self._jpeg, self._stream_count
+
     def get_frame(self):
         with self._condition:
             return self._frame
@@ -52,7 +60,11 @@ class FrameStore:
     def wait_for_next_stream(
         self, last_count: int, timeout: float = 5.0
     ) -> Optional[Tuple[bytes, int]]:
-        """Block until a new browser stream frame is available."""
+        """Block until a new browser stream frame is available.
+
+        Always returns the *latest* JPEG (not an intermediate one), so a slow
+        MJPEG client can skip backlog instead of replaying stale frames.
+        """
         with self._condition:
             if self._stream_count <= last_count:
                 self._condition.wait(timeout)

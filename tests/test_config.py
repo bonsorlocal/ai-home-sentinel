@@ -35,7 +35,9 @@ def test_load_real_config_has_expected_sections():
         "dashboard",
         "video_metadata",
         "voice",
+        "google",
         "performance",
+        "pi_bridge",
     ):
         assert config.get(section) is not None, f"missing section: {section}"
 
@@ -75,6 +77,9 @@ def test_voice_defaults_present():
     assert config.get("voice", "speak_text_queries") is False
     assert config.get("voice", "wake_word_enabled") is False
     assert config.get("voice", "language") == "en-US"
+    assert config.get("voice", "tts_provider") == "auto"
+    vi_cfg = config.get("google", "video_intelligence") or {}
+    assert vi_cfg.get("fallback_only") is True
 
 
 def test_missing_file_uses_defaults(tmp_path):

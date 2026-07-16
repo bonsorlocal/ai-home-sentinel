@@ -9,17 +9,19 @@
 # phases (camera, motion, detection, faces) work without changing structure.
 
 camera:
-  type: "picamera2"     # Pi camera only (no USB/opencv fallback)
+  type: "picamera2"     # Pi camera only (no USB/opencv fallback on Pi)
+  index: null           # null = auto; set 0 or 1 to pick a specific CSI port on Pi 5
+  startup_wait_seconds: 3    # short wait after service restart (was 15)
   width: 1280           # full capture for AI + tier-2 snapshots
   height: 720
   ai_width: 640
   ai_height: 360
-  target_fps: 20        # raw capture rate for motion / YOLO
-  # Live browser stream only — smaller + slower than capture to keep the Pi smooth
-  stream_width: 640
-  stream_height: 360
-  stream_fps: 10
-  stream_jpeg_quality: 55
+  target_fps: 15        # raw capture rate for motion / YOLO
+  # Live view: sharper Wi-Fi balance (raise further only if on Ethernet)
+  stream_width: 800
+  stream_height: 450
+  stream_fps: 8
+  stream_jpeg_quality: 70
 
 motion:
   enabled: true
@@ -44,13 +46,6 @@ motion:
   brightness_jump_threshold: 38.0
   cooldown_seconds: 30   # log motion at most once per 30s (ledger only, no snapshot)
   background_learning_rate: 0.02
-
-dedupe:                  # reduce repeated near-identical log spam
-  enabled: true
-  motion_window_seconds: 300   # 5-minute similarity window
-  motion_area_tolerance: 0.75  # +/-75% area considered similar (moderate)
-  object_window_seconds: 120   # one "person present" log per 2 minutes (tier 1)
-  face_window_seconds: 120     # one face log per name per 2 minutes (tier 1)
 
 detector:
   enabled: true
@@ -103,9 +98,14 @@ clips:                   # Phase 8 - save short motion clips (Ring-style)
 
 dvr:                     # Phase 9 - always-on local USB recording
   enabled: true
-  storage_root: "/media/sentinel-dvr"  # USB mount point (required; no SD fallback)
+  storage_root: "/home/sentinel/ai-home-sentinel/data/dvr"  # OS USB drive path on this Pi
+  fallback_storage_root: ""            # optional alternate mount when primary path unavailable
   retention_hours: 48
-  segment_seconds: 60
+  segment_seconds: 3600              # 1 hour per segment (3600 seconds)
+  align_to_clock_hours: true         # rotate segments at the top of each hour
+  auto_summarize: true               # build a short summary when each segment closes
+  auto_summarize_cloud: true         # enhance with cloud vision when API keys exist
+  segment_summary_daily_cap: 24      # max cloud summaries per day for DVR segments
   record_fps: 10
   record_width: 640
   record_height: 360
@@ -116,51 +116,88 @@ dvr:                     # Phase 9 - always-on local USB recording
 dashboard:
   host: "0.0.0.0"        # 0.0.0.0 = reachable from other devices on your LAN
   port: 5000             # open http://<pi-ip>:5000 in a browser
-  require_token: false   # set true later to require a token to view
-  token: ""              # the secret token (leave empty while require_token is false)
+  require_token: false   # TEMP: open for Emergent tunnel demo (turn back on after)
+  token: ""              # leave empty; set dashboard_token in secrets.yaml instead
+  secrets_file: "secrets.yaml"
 
-voice:                   # spoken replies in the dashboard (Web Speech API in browser)
+voice:                   # spoken replies in the dashboard
   enabled: true          # speak answers aloud (set false for text-only)
+  tts_provider: "auto"   # auto | google | browser (auto picks Google TTS when configured)
   speak_text_queries: false   # also speak when you type instead of using the mic
   wake_word_enabled: false    # future: always-on "hey sentinel" (not implemented yet)
   wake_word: "hey sentinel"
-  language: "en-US"      # speech recognition + voice language
+  language: "en-US"      # speech recognition language (mic still uses browser STT)
+
+google:                  # GCP service account APIs (Video Intelligence + TTS)
+  project_id: "sentinel-501222"  # bucket defaults to {project_id}-sentinel-video
+  credentials_file: "secrets/gcp-service-account.json"
+  gcs_bucket: ""         # leave empty to use {project_id}-sentinel-video
+  secrets_file: "secrets.yaml"
+  video_intelligence:
+    enabled: true
+    fallback_only: true  # only run when Gemini keyframe analysis is weak
+    daily_job_cap: 3
+    max_upload_mb: 80
+    inline_max_mb: 9
+    request_timeout_seconds: 120
+    poll_interval_seconds: 3
+  text_to_speech:
+    enabled: true
+    voice_name: "en-US-Neural2-F"
+    language_code: "en-US"
+    speaking_rate: 1.0
+    daily_char_cap: 20000
+    request_timeout_seconds: 20
 
 notifications:           # Phase 7b - phone push alerts for tier-2 events
-  enabled: false         # set true after configuring topic below
+  enabled: true          # home-beta: phone push for tier-2 events
   provider: "ntfy"         # ntfy.sh (free HTTP push; subscribe on your phone)
-  topic: ""                # e.g. "my-home-sentinel-abc123" (pick a unique name)
+  topic: "home-sentinel-60dc9084"  # subscribe to this topic in the ntfy phone app
   cooldown_seconds: 60     # minimum seconds between pushes
   notify_on_tier: 2        # send when reasoner promotes to this tier or higher
   request_timeout_seconds: 10
   secrets_file: "secrets.yaml"   # optional ntfy_auth_token for private topics
 
-brain:                   # B1 "language brain" (Grok cloud) - chat + daily recap
+brain:                   # B1 "language brain" (Google/Grok) - chat + daily recap
   enabled: true          # set false to fully disable the brain
+  provider: "auto"                 # auto = Google first when key exists, else Grok
   base_url: "https://api.x.ai/v1"   # xAI Grok API (OpenAI-compatible)
-  fast_model: "grok-4.3"            # quick everyday questions
+  google_base_url: "https://generativelanguage.googleapis.com/v1beta"
+  chat_model: "grok-4.3"            # quality-first model for interactive chat
+  google_chat_model: "gemini-1.5-flash"
+  google_smart_model: "gemini-1.5-pro"
+  google_vision_model: "gemini-1.5-flash"
+  fast_model: "grok-4.3"            # legacy alias (still used for compatibility)
   smart_model: "grok-4.3"           # the "summarize my day" recap
-  fast_reasoning_effort: ""         # "", "low", "medium", or "high" ("" = omit)
-  smart_reasoning_effort: ""        # leave "" for fast, cheap answers
+  fallback_model: "grok-4.3"        # retry model when primary cloud call fails
+  fallback_on_cloud_error: true
+  fast_reasoning_effort: "medium"   # tuned for better response quality
+  smart_reasoning_effort: "high"
   daily_call_cap: 50                # safety cap; brain declines after this many calls/day
   request_timeout_seconds: 30       # give up on a Grok call after this long
+  request_retries: 1                # retry transient cloud/network failures once
   max_events_in_context: 40         # how many recent events to feed the model
   max_answer_tokens: 500            # keep answers short (and cheap)
+  max_casual_answer_tokens: 220
   include_clip_metadata_in_context: true
   live_vision_enabled: true         # attach live camera frame for present-tense questions
   vision_model: "grok-4.3"          # model used when a live frame is attached
   live_jpeg_quality: 70
   live_max_width: 640
-  dvr_max_segments_per_query: 8
-  dvr_max_analysis_segments: 2
-  dvr_timeout_budget_seconds: 35
+  strict_evidence_guardrails: true  # never invent evidence when local context is empty
+  local_casual_fallback: true       # graceful local fallback when cloud chat is down
+  memory_enabled: true              # persist explicit and inferred feedback
+  memory_max_entries: 300
+  memory_max_context_items: 8
   secrets_file: "secrets.yaml"      # where the Grok key lives (git-ignored)
 
 video_metadata:          # Phase 8 priority - cloud clip summaries for voice queries
   enabled: true          # enabled for Phase 8 validation
-  provider: "grok"
+  provider: "auto"       # auto = Google first when key exists, else Grok
   base_url: "https://api.x.ai/v1"
   model: "grok-4.3"
+  google_base_url: "https://generativelanguage.googleapis.com/v1beta"
+  google_model: "gemini-1.5-flash"
   max_keyframes: 3
   daily_call_cap: 30
   request_timeout_seconds: 20
@@ -171,3 +208,31 @@ performance:
   drop_old_frames: true          # throw away stale frames so AI stays fresh
   log_fps_every_seconds: 10      # how often to log FPS to the console
   max_cpu_temp_celsius: 75       # warn when the Pi gets hotter than this
+
+reasoner:                  # Phase 7 - tier promotion (night / repeat / unknown face)
+  enabled: true
+  night_hour_start: 22
+  night_hour_end: 6
+  repeat_person_window_minutes: 5
+  repeat_person_threshold: 3
+  motion_precedes_seconds: 90
+
+household:                 # Phase 9C-10 - owner/resident profiles
+  enabled: true
+  max_residents: 8
+  mobile_pwa_enabled: false    # Phase 10 Track A (optional)
+  telephony_enabled: false     # Phase 10 Track B (optional)
+
+emergent_app:              # optional Emergent webapp (separate port on Pi)
+  enabled: false           # set true after deploy_emergent_pi.ps1
+  url: ""                  # e.g. "http://192.168.1.244:8080"
+  label: "Emergent App"    # nav link text on the Sentinel dashboard
+
+pi_bridge:                 # push local Sentinel events into Emergent API
+  enabled: false
+  base_url: "http://127.0.0.1:8080"
+  heartbeat_seconds: 10
+  camera_sync_seconds: 60
+  post_events: true
+  post_dvr_segments: true
+  request_timeout_seconds: 3

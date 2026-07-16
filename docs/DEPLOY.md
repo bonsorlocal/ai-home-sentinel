@@ -89,8 +89,38 @@ chmod +x scripts/deploy_pi.sh
 - [ ] `/health` returns `{"ok": true}`
 - [ ] `/status` shows `camera_active`, `motion_active`, `detector_active`
 - [ ] Live video at `/video`
+- [ ] `/api/dvr/status` shows `enabled: true`, `available: true`, and expected `storage_root`
 - [ ] `smoke_brain.py` exits 0 (if brain enabled)
 - [ ] Tier-2 event triggers phone push (if notifications enabled)
+
+## DVR storage policy (USB-boot Pi)
+
+For a Pi that boots from USB SSD, using the OS drive for DVR is valid.
+
+Recommended config:
+
+```yaml
+dvr:
+  enabled: true
+  storage_root: "/home/sentinel/ai-home-sentinel/data/dvr"
+  fallback_storage_root: ""
+```
+
+Quick checks:
+
+```bash
+mkdir -p /home/sentinel/ai-home-sentinel/data/dvr
+sudo systemctl restart sentinel
+curl -s http://localhost:5000/api/dvr/status | python3 -m json.tool
+df -h /home/sentinel/ai-home-sentinel/data/dvr
+```
+
+Look for:
+
+- `available: true`
+- `active: true`
+- `storage_root` matches your configured path
+- enough free disk for your retention target
 
 ## Notifications on Pi
 
@@ -104,5 +134,5 @@ chmod +x scripts/deploy_pi.sh
 |-------|-----|
 | Camera unavailable | `sudo apt install python3-picamera2`; recreate venv with `--system-site-packages` |
 | Detector inactive | Ensure `models/yolo_nano.pt` exists; check `journalctl -u sentinel -f` |
-| Brain offline | Add `grok_api_key` to `secrets.yaml` on the Pi |
+| Brain offline | Add `google_api_key` and/or `grok_api_key` to `secrets.yaml` on the Pi |
 | No push alerts | Enable notifications in config; pick a unique topic; check cooldown |

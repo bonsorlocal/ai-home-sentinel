@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from sentinel.config import Config, DEFAULT_CONFIG, load_config  # noqa: E402
+from sentinel.config import Config, load_config  # noqa: E402
 from sentinel.face_recognition_module import FaceRecognizer  # noqa: E402
 from sentinel.frame_store import FrameStore  # noqa: E402
 from sentinel.motion import MotionDetector  # noqa: E402
@@ -34,7 +34,8 @@ def _face_config(**overrides):
 
 def test_face_recognition_disabled_by_default_in_code_defaults():
     """Built-in defaults keep faces off until config.yaml enables them."""
-    config = Config(DEFAULT_CONFIG)
+    missing = os.path.join(PROJECT_ROOT, "tests", "nonexistent-config.yaml")
+    config = load_config(path=missing)
     assert config.get("face_recognition", "enabled") is False
 
 

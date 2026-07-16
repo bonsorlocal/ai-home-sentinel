@@ -52,6 +52,7 @@ tar -C $LocalRoot -cf - `
     --exclude=.pytest_cache `
     --exclude=*.db `
     --exclude=secrets.yaml `
+    --exclude=secrets/gcp-service-account.json `
     --exclude=.git `
     . | ssh $PiHost "tar -C $PiDir -xf -"
 
@@ -59,6 +60,14 @@ $SecretsPath = Join-Path $LocalRoot "secrets.yaml"
 if (Test-Path $SecretsPath) {
     Write-Host "Copying secrets.yaml to Pi..." -ForegroundColor Cyan
     scp $SecretsPath "${PiHost}:${PiDir}/secrets.yaml"
+}
+
+$GcpKeyPath = Join-Path $LocalRoot "secrets/gcp-service-account.json"
+if (Test-Path $GcpKeyPath) {
+    Write-Host "Copying GCP service account key to Pi..." -ForegroundColor Cyan
+    ssh $PiHost "mkdir -p $PiDir/secrets && chmod 700 $PiDir/secrets"
+    scp $GcpKeyPath "${PiHost}:${PiDir}/secrets/gcp-service-account.json"
+    ssh $PiHost "chmod 600 $PiDir/secrets/gcp-service-account.json"
 }
 
 Write-Host "Installing deps and restarting service on Pi..." -ForegroundColor Cyan
@@ -72,7 +81,8 @@ sleep 3
 systemctl is-active sentinel
 curl -sf http://localhost:5000/health
 echo ''
-curl -sf http://localhost:5000/status | python3 -c "import sys,json; s=json.load(sys.stdin); print('phase', s.get('phase'), '| camera', s.get('camera_active'), '| brain', s.get('brain_active'))"
+curl -sf http://localhost:5000/status | python3 -c "import sys,json; s=json.load(sys.stdin); d=s.get('dvr') or {}; print('phase', s.get('phase'), '| camera', s.get('camera_active'), '| brain', s.get('brain_active'), '| dvr', d.get('available'), d.get('message',''))"
+curl -sf http://localhost:5000/api/dvr/status | python3 -c "import sys,json; d=json.load(sys.stdin); print('dvr storage', d.get('storage_root'), '| active', d.get('active'), '| free_gb', d.get('disk_free_gb'))"
 "@
 
 Write-Host ""

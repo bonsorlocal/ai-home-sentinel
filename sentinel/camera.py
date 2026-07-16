@@ -76,6 +76,10 @@ class Camera:
 
         cam = config.get("camera") or {}
         self._type = str(cam.get("type", "auto")).lower().strip()
+        self._index = cam.get("index")
+        self._startup_wait_seconds = max(
+            0.0, float(cam.get("startup_wait_seconds", 15))
+        )
         self._width = int(cam.get("width", 1280))
         self._height = int(cam.get("height", 720))
         self._target_fps = float(cam.get("target_fps", 20)) or 20.0
@@ -139,15 +143,42 @@ class Camera:
 
     def _run(self) -> None:
         """Open a backend and keep capturing, reconnecting if the camera drops."""
+        if self._startup_wait_seconds > 0:
+            self._message = (
+                f"Waiting {self._startup_wait_seconds:.0f}s for the camera "
+                "subsystem to finish booting..."
+            )
+            _log(self._message)
+            self._wait(self._startup_wait_seconds)
+
+        open_failures = 0
+        last_logged_message = ""
+        last_log_at = 0.0
+
         while not self._stop_event.is_set():
             backend = self._open_backend()
             if backend is None:
-                # Could not open any camera. For a forced backend we keep
-                # retrying in case it gets plugged in; "auto" does too. We wait
-                # a few seconds so we are not hammering the hardware.
-                self._wait(5.0)
+                # Back off while the sensor is missing so we do not spam
+                # libcamera/I2C or fill the journal with identical lines.
+                open_failures += 1
+                delay = min(60.0, 5.0 * (2 ** min(open_failures - 1, 3)))
+                now = time.monotonic()
+                should_log = (
+                    self._message != last_logged_message
+                    or (now - last_log_at) >= 60.0
+                )
+                if should_log:
+                    _log(
+                        f"{self._message} Retrying in {delay:.0f}s "
+                        f"(attempt {open_failures})."
+                    )
+                    last_logged_message = self._message
+                    last_log_at = now
+                self._wait(delay)
                 continue
 
+            open_failures = 0
+            last_logged_message = ""
             read, close, name = backend
             self._backend_name = name
             self._message = f"Capturing from {name}."
@@ -176,7 +207,13 @@ class Camera:
 
         while not self._stop_event.is_set():
             start = time.monotonic()
-            frame = read()
+            grabbed = read()
+
+            stream_src = None
+            if isinstance(grabbed, tuple) and len(grabbed) == 2:
+                frame, stream_src = grabbed
+            else:
+                frame = grabbed
 
             if frame is None:
                 # An occasional empty read is normal; many in a row means the
@@ -191,8 +228,10 @@ class Camera:
             now = time.monotonic()
             stream_jpeg = None
             if now - last_stream_at >= stream_interval:
+                # Prefer the already-small lores frame when Picamera2 provides it.
+                encode_src = stream_src if stream_src is not None else frame
                 stream_jpeg = _encode_stream_jpeg(
-                    frame,
+                    encode_src,
                     self._stream_width,
                     self._stream_height,
                     self._stream_jpeg_quality,
@@ -211,15 +250,8 @@ class Camera:
     def _open_backend(self) -> Optional[Tuple[Reader, Closer, str]]:
         """Open the camera according to ``camera.type``, with auto-fallback."""
         if self._type == "picamera2":
-            backend = self._open_picamera2()
-            if backend is not None:
-                return backend
-            # If Picamera2 is forced but unavailable (common on localhost dev),
-            # fall back to OpenCV so local USB/integrated cameras can still work.
-            if Picamera2 is None:
-                _log("Picamera2 unavailable; falling back to OpenCV backend.")
-                return self._open_opencv()
-            return None
+            # Strict Pi-camera mode: never fall back to a USB/demo webcam.
+            return self._open_picamera2()
         if self._type == "opencv":
             return self._open_opencv()
 
@@ -241,28 +273,71 @@ class Camera:
             return None
 
         try:
-            picam2 = Picamera2()
-            # Picamera2's format names are reversed from what you'd expect:
-            # requesting "RGB888" actually hands back a BGR-ordered array, which
-            # is exactly what OpenCV/JPEG encoding want, so colours come out right.
-            video_config = picam2.create_video_configuration(
-                main={"size": (self._width, self._height), "format": "RGB888"}
-            )
-            picam2.configure(video_config)
-            picam2.start()
-
-            def read():
-                return picam2.capture_array()
-
-            def close():
-                picam2.stop()
-                picam2.close()
-
-            return read, close, "Picamera2 (Raspberry Pi camera)"
-        except Exception as error:  # noqa: BLE001 - report, don't crash the app
-            self._message = f"Could not start the Pi camera: {error}"
+            cameras = Picamera2.global_camera_info()
+        except Exception as error:  # noqa: BLE001
+            self._message = f"Could not enumerate Pi cameras: {error}"
             _log(self._message)
             return None
+
+        if not cameras:
+            self._message = (
+                "No Pi camera detected by libcamera. The Pi OS cannot see a "
+                "camera sensor (check CSI cable on Pi and module). On USB-boot "
+                "Pi 5, run scripts/ensure_pi_camera.sh and reboot once."
+            )
+            _log(self._message)
+            return None
+
+        indices: list[int] = []
+        if self._index is not None:
+            indices = [int(self._index)]
+        else:
+            indices = list(range(len(cameras)))
+
+        last_error = ""
+        for camera_num in indices:
+            if camera_num < 0 or camera_num >= len(cameras):
+                continue
+            info = cameras[camera_num]
+            label = str(info.get("Model", info.get("model", f"camera {camera_num}")))
+            try:
+                picam2 = Picamera2(camera_num=camera_num)
+                # main = AI/DVR; lores = cheap live-view encode (much smoother on Wi-Fi).
+                video_config = picam2.create_video_configuration(
+                    main={"size": (self._width, self._height), "format": "RGB888"},
+                    lores={
+                        "size": (self._stream_width, self._stream_height),
+                        "format": "RGB888",
+                    },
+                    buffer_count=2,
+                )
+                picam2.configure(video_config)
+                picam2.start()
+
+                def read(picam=picam2):
+                    request = picam.capture_request()
+                    try:
+                        main = request.make_array("main")
+                        lores = request.make_array("lores")
+                        return main, lores
+                    finally:
+                        request.release()
+
+                def close(picam=picam2):
+                    picam.stop()
+                    picam.close()
+
+                backend_name = f"Picamera2 ({label})"
+                return read, close, backend_name
+            except Exception as error:  # noqa: BLE001 - report, don't crash the app
+                last_error = str(error)
+                _log(f"Could not open Pi camera #{camera_num} ({label}): {error}")
+
+        self._message = (
+            f"Could not start the Pi camera: {last_error or 'open failed'}"
+        )
+        _log(self._message)
+        return None
 
     def _open_opencv(self) -> Optional[Tuple[Reader, Closer, str]]:
         """Open a USB/V4L2 webcam via OpenCV, or return None on failure."""
@@ -325,7 +400,7 @@ def _encode_stream_jpeg(frame, width: int, height: int, quality: int) -> Optiona
         return None
     if cv2 is not None and (frame.shape[1] != width or frame.shape[0] != height):
         try:
-            frame = cv2.resize(frame, (width, height))
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         except Exception as error:  # noqa: BLE001
             _log(f"Could not resize stream frame: {error}")
     return _encode_jpeg(frame, quality)

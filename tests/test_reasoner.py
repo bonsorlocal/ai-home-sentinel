@@ -198,7 +198,7 @@ class TestPersonClassification:
             ts=ts,
         )
         assert tier == 1
-        assert imp == pytest.approx(0.40)
+        assert imp == pytest.approx(0.45)
 
     def test_stale_motion_does_not_promote(self, reasoner: Reasoner) -> None:
         ts = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)

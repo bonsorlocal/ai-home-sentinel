@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+import os
 from typing import Any, Dict, List, Optional
 
 from sentinel.brain import Brain
@@ -22,8 +23,10 @@ from sentinel.face_recognition_module import FaceRecognizer
 from sentinel.frame_store import FrameStore
 from sentinel.motion import MotionDetector
 from sentinel.notifier import Notifier
+from sentinel.pi_bridge import PiBridge
 from sentinel.reasoner import Reasoner
 from sentinel.storage import ClipStorage, SnapshotStorage
+from sentinel.google_cloud import GoogleCloudServices, gemini_keyframe_analysis_is_weak
 from sentinel.utils import now_iso
 
 
@@ -111,17 +114,30 @@ class SentinelRuntime:
             frame_getter=frame_store.get_frame,
             camera_active_fn=frame_store.is_fresh,
             dvr_context_fn=self._build_dvr_context,
+            owner_enroll_fn=self._enroll_owner,
         )
         self.reasoner = Reasoner(config)
         self.notifier = Notifier(config)
         self.clip_metadata = ClipMetadataWorker(config, self.ledger)
+        self.google = GoogleCloudServices(config)
+        self.pi_bridge = PiBridge(
+            config,
+            self.ledger,
+            self.dvr,
+            camera_active_fn=frame_store.is_fresh,
+        )
 
     def start(self) -> None:
+        if self.clip_metadata.is_available():
+            self.dvr.configure_auto_summaries(analyzer_fn=self.clip_metadata.analyze_video)
+        else:
+            self.dvr.configure_auto_summaries()
         self.dvr.start()
         self.motion.start()
         self.detector.start()
         self.faces.start()
         self.clip_metadata.start()
+        self.pi_bridge.start()
 
     def stop(self) -> None:
         self.dvr.stop()
@@ -129,6 +145,7 @@ class SentinelRuntime:
         self.detector.stop()
         self.motion.stop()
         self.clip_metadata.stop()
+        self.pi_bridge.stop()
 
     def status(self) -> Dict[str, Any]:
         face_status = dict(self.faces.status())
@@ -148,8 +165,11 @@ class SentinelRuntime:
             },
             "dvr": self.dvr.status(),
             "video_metadata": self.clip_metadata.status(),
+            "google": self.google.status(),
             "session_active": bool(self._active_session),
             "event_count": self.ledger.count(),
+            "owner_profile": self.brain.owner_profile_status(),
+            "pi_bridge": self.pi_bridge.status(),
         }
 
     def _insert_event(self, **kwargs: Any) -> EventRecord:
@@ -159,6 +179,7 @@ class SentinelRuntime:
             self.clip_metadata.enqueue(record.id, record.clip_path)
         if self.notifier.notify(record):
             self.ledger.mark_notified(record.id)
+        self.pi_bridge.on_event(record)
         return record
 
     def _downsample_clip_frames(self, frames: List, max_frames: int) -> List:
@@ -590,9 +611,10 @@ class SentinelRuntime:
             top, right, bottom, left = face["location"]
             crop = frame[top:bottom, left:right]
             if crop.size > 0:
-                session["snapshot_path"] = self.storage.save_snapshot(
-                    crop, prefix="unknown_face"
-                )
+                unknown_path = self.faces.save_unknown_face(crop)
+                if unknown_path:
+                    session["unknown_face_path"] = unknown_path
+                session["snapshot_path"] = self.storage.save_snapshot(crop, prefix="unknown_face")
         except Exception as error:  # noqa: BLE001
             self._face_callback_errors += 1
             print(f"[face] Could not save unknown face: {error}")
@@ -642,14 +664,15 @@ class SentinelRuntime:
         bundle = self.dvr.build_query_context(question)
         analysis_context = ""
         segments = bundle.get("segments") or []
+        gemini_analyzed: List[Dict[str, Any]] = []
         if use_heavy and self.clip_metadata.is_available():
-            analyzed = self.dvr.analyze_segments(
+            gemini_analyzed = self.dvr.analyze_segments(
                 segments,
-                analyzer_fn=self.clip_metadata._analyze_clip,  # best-effort sync analysis
+                analyzer_fn=self.clip_metadata.analyze_video,
             )
-            if analyzed:
+            if gemini_analyzed:
                 parts: List[str] = []
-                for item in analyzed:
+                for item in gemini_analyzed:
                     payload = item.get("analysis") or {}
                     scene = str(payload.get("scene_summary", "")).strip()
                     actions = payload.get("actions") or []
@@ -659,6 +682,42 @@ class SentinelRuntime:
                         f"scene={scene or 'n/a'} actors={actors} actions={actions}"
                     )
                 analysis_context = "\n".join(parts)
+
+        vi = self.google.video_intelligence
+        try_vi = (
+            use_heavy
+            and vi.is_available()
+            and segments
+            and (
+                not vi.fallback_only
+                or gemini_keyframe_analysis_is_weak(gemini_analyzed)
+            )
+        )
+        if try_vi:
+            seg = segments[0]
+            path = str(getattr(seg, "path", "") or "")
+            if path and os.path.isfile(path):
+                try:
+                    vi_result = vi.analyze_file(path)
+                    scene = str(vi_result.get("scene_summary", "")).strip()
+                    if scene:
+                        block = (
+                            f"- segment#{getattr(seg, 'id', '?')} "
+                            f"[{getattr(seg, 'start_ts', '')} -> {getattr(seg, 'end_ts', '')}] "
+                            f"video_intelligence={scene}"
+                        )
+                        analysis_context = (
+                            f"{analysis_context}\n{block}".strip()
+                            if analysis_context
+                            else block
+                        )
+                except Exception as error:  # noqa: BLE001
+                    note = f"(Video Intelligence fallback unavailable: {str(error)[:160]})"
+                    analysis_context = (
+                        f"{analysis_context}\n{note}".strip()
+                        if analysis_context
+                        else note
+                    )
         return {
             "context": str(bundle.get("context", "")),
             "analysis_context": analysis_context,
@@ -666,4 +725,73 @@ class SentinelRuntime:
             "window_end": bundle.get("window_end"),
             "window_source": bundle.get("window_source"),
             "segment_count": len(segments),
+        }
+
+    def _enroll_owner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            return {"ok": False, "message": "Owner enrollment requires a name."}
+        role = str(payload.get("role", "owner_admin")).strip() or "owner_admin"
+        appearance = payload.get("appearance_signature") or {}
+        profile = {
+            "name": name,
+            "role": role,
+            "appearance_signature": appearance if isinstance(appearance, dict) else {},
+            "enrollment_source": "natural_language",
+        }
+        stored = self.brain.save_owner_profile(profile)
+        frame = self._frame_store.get_frame()
+        if frame is None:
+            return {
+                "ok": True,
+                "message": "Saved owner profile, but no live frame was available for face enrollment.",
+                "profile": stored,
+                "face_enrolled": False,
+            }
+        known_root = str(
+            (self._config.get("face_recognition") or {}).get("known_faces_dir", "data/known_faces")
+        )
+        os.makedirs(known_root, exist_ok=True)
+        owner_id = "owner_admin"
+        person_dir = os.path.join(known_root, owner_id)
+        os.makedirs(person_dir, exist_ok=True)
+        image_path = os.path.join(person_dir, f"enroll_{int(time.time())}.jpg")
+        try:
+            import cv2  # type: ignore
+
+            if not cv2.imwrite(image_path, frame):
+                return {
+                    "ok": True,
+                    "message": "Saved owner profile, but could not write live enrollment frame.",
+                    "profile": stored,
+                    "face_enrolled": False,
+                }
+        except Exception as error:  # noqa: BLE001
+            return {
+                "ok": True,
+                "message": f"Saved owner profile, but frame capture failed: {error}",
+                "profile": stored,
+                "face_enrolled": False,
+            }
+        try:
+            enrolled = self.faces.enroll_face(image_path, owner_id, name)
+        except Exception as error:  # noqa: BLE001
+            return {
+                "ok": True,
+                "message": f"Saved owner profile, but face enrollment failed: {error}",
+                "profile": stored,
+                "face_enrolled": False,
+            }
+        if enrolled:
+            return {
+                "ok": True,
+                "message": f"Owner profile saved and face enrolled for {name}.",
+                "profile": stored,
+                "face_enrolled": True,
+            }
+        return {
+            "ok": True,
+            "message": "Owner profile saved, but no clear face was found in the live frame.",
+            "profile": stored,
+            "face_enrolled": False,
         }

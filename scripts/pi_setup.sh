@@ -43,7 +43,7 @@ else
 fi
 
 echo "== data dirs =="
-mkdir -p data/known_faces data/events/snapshots models
+mkdir -p data/known_faces data/events/snapshots data/dvr models
 
 echo "== systemd service =="
 sudo cp sentinel.service /etc/systemd/system/

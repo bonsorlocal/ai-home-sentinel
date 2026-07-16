@@ -18,6 +18,14 @@
     <header>
       <h1>AI Home Sentinel</h1>
       <p class="subtitle" id="page-subtitle">Loading...</p>
+      <nav class="nav-links" aria-label="Main">
+        <a href="/" aria-current="page">Live</a>
+        <a href="/events">Events</a>
+        <a href="/dvr">DVR</a>
+        {% if emergent_app_url %}
+        <a href="{{ emergent_app_url }}" target="_blank" rel="noopener">{{ emergent_app_label }}</a>
+        {% endif %}
+      </nav>
     </header>
 
     <main>
@@ -68,6 +76,42 @@
         <button type="button" id="summary-btn" class="btn btn-secondary">
           Summarize my day
         </button>
+        <div class="feedback-panel" id="feedback-panel">
+          <p class="muted" id="feedback-state">
+            Rate Sentinel's last answer to improve future responses.
+          </p>
+          <div class="feedback-row">
+            <button type="button" class="btn btn-secondary" id="feedback-up">
+              👍 Helpful
+            </button>
+            <button type="button" class="btn btn-secondary" id="feedback-down">
+              👎 Needs fix
+            </button>
+          </div>
+          <textarea
+            id="feedback-correction"
+            class="chat-input"
+            rows="2"
+            placeholder="Optional correction (e.g., 'That was my brother, not a stranger')."
+          ></textarea>
+          <label class="muted" for="feedback-remember">
+            <input type="checkbox" id="feedback-remember" />
+            Remember this as a preference
+          </label>
+          <button type="button" id="feedback-submit" class="btn btn-secondary">
+            Send feedback
+          </button>
+        </div>
+      </section>
+
+      <section class="card" id="profile-card">
+        <h2>Household profile</h2>
+        <p class="muted" id="profile-state">Checking owner profile...</p>
+        <p id="profile-owner-name"><strong id="owner-name">-</strong></p>
+        <p class="muted" id="profile-enroll-hint">
+          No owner enrolled yet. In chat, try: "I'm Jordan, make me the owner."
+        </p>
+        <ul class="status-list" id="resident-list"></ul>
       </section>
 
       <section class="card" id="connection-card">

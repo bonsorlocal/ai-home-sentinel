@@ -8,10 +8,12 @@
 (function () {
   "use strict";
 
-  var REFRESH_MS = 3000; // how often to refresh the status (3 seconds)
+  var REFRESH_MS = 5000; // status refresh; keep light on Wi-Fi so /video stays smooth
+  var PROFILE_REFRESH_MS = 30000;
+  var lastProfileRefreshAt = 0;
 
-  // Tracks whether the live <img> is currently pointed at the /video stream,
-  // so we only start or stop it when the camera state actually changes.
+  // Live view uses one continuous MJPEG connection (/video). That is much
+  // smoother on Wi-Fi than fetching a new JPEG for every frame.
   var videoStreaming = false;
 
   // Voice settings from /status (defaults until first refresh).
@@ -21,7 +23,11 @@
     wake_word_enabled: false,
     wake_word: "hey sentinel",
     language: "en-US",
+    tts_provider: "browser",
+    google_tts_available: false,
   };
+  var latestInteraction = null;
+  var selectedHelpful = null;
 
   function byId(id) {
     return document.getElementById(id);
@@ -38,22 +44,34 @@
     return value + "%";
   }
 
+  function formatDashboardTime(iso) {
+    if (!iso) return "-";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    }).format(d);
+  }
+
   function updateLiveView(data) {
     var video = byId("video");
     var message = byId("video-message");
     var camera = data.camera || {};
 
     if (data.camera_active) {
-      // Camera is producing frames: point the <img> at the live stream once.
       if (!videoStreaming) {
-        // The query string busts the cache so a fresh stream starts each time.
+        // One long-lived MJPEG stream — cache-bust only when (re)starting.
         video.src = "/video?ts=" + Date.now();
         videoStreaming = true;
       }
       video.classList.remove("hidden");
       message.classList.add("hidden");
     } else {
-      // No live frames: stop the stream and explain why in plain language.
       if (videoStreaming) {
         video.removeAttribute("src");
         videoStreaming = false;
@@ -68,7 +86,7 @@
   function render(data) {
     // Connection / timestamp
     setBadge(byId("connection"), "connected", "badge-ok");
-    byId("timestamp").textContent = data.timestamp || "-";
+    byId("timestamp").textContent = formatDashboardTime(data.timestamp);
 
     // Live camera view reflects the real camera state (works even if health
     // reading failed below).
@@ -151,6 +169,9 @@
       4: "Phase 4 - Object Detection",
       5: "Phase 5 - Face Recognition",
       7: "Phase 7 - Reasoner",
+      8: "Phase 8 - Clips & Metadata",
+      9: "Phase 9 - DVR + Brain",
+      10: "Phase 10 - Household Profiles",
     };
     var subtitle = byId("page-subtitle");
     if (subtitle) {
@@ -217,6 +238,69 @@
         dvrState.textContent = "off";
       }
     }
+    refreshProfile(false);
+  }
+
+  function refreshProfile(force) {
+    var now = Date.now();
+    if (!force && lastProfileRefreshAt && now - lastProfileRefreshAt < PROFILE_REFRESH_MS) {
+      return;
+    }
+    lastProfileRefreshAt = now;
+    fetch("/api/profile/owner", { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("profile status failed");
+        return response.json();
+      })
+      .then(function (ownerData) {
+        var state = byId("profile-state");
+        var ownerName = byId("owner-name");
+        var hint = byId("profile-enroll-hint");
+        var configured = ownerData && ownerData.configured;
+        if (state) {
+          state.textContent = configured
+            ? "Owner enrolled — privileged settings are gated to this profile."
+            : "No owner enrolled yet.";
+        }
+        if (ownerName) {
+          var profile = (ownerData && ownerData.profile) || {};
+          ownerName.textContent = configured
+            ? profile.name || "Owner"
+            : "Not enrolled";
+        }
+        if (hint) {
+          hint.classList.toggle("hidden", !!configured);
+        }
+        return fetch("/api/profile/residents", { cache: "no-store" });
+      })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then(function (residentData) {
+        var list = byId("resident-list");
+        if (!list) return;
+        list.innerHTML = "";
+        var residents =
+          (residentData && residentData.residents) || [];
+        if (!residents.length) {
+          var empty = document.createElement("li");
+          empty.className = "muted";
+          empty.textContent = "No resident profiles yet.";
+          list.appendChild(empty);
+          return;
+        }
+        residents.forEach(function (resident) {
+          var item = document.createElement("li");
+          var name = resident.name || resident.resident_id || "resident";
+          item.textContent = name + " (" + (resident.role || "resident") + ")";
+          list.appendChild(item);
+        });
+      })
+      .catch(function () {
+        var state = byId("profile-state");
+        if (state) state.textContent = "Profile status unavailable.";
+      });
   }
 
   function refresh() {
@@ -321,9 +405,8 @@
       window.speechSynthesis.cancel();
     }
 
-    function speak(text) {
+    function speakWithBrowser(text) {
       if (!supported || !text) return;
-      if (!voiceSettings.enabled) return;
       stopSpeaking();
       if (!voicesLoaded) loadVoices();
       var utter = new SpeechSynthesisUtterance(text);
@@ -332,6 +415,39 @@
       utter.pitch = 1;
       if (selectedVoice) utter.voice = selectedVoice;
       window.speechSynthesis.speak(utter);
+    }
+
+    function speakWithGoogle(text) {
+      fetch("/api/voice/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("TTS request failed");
+          return response.blob();
+        })
+        .then(function (blob) {
+          var url = URL.createObjectURL(blob);
+          var audio = new Audio(url);
+          audio.onended = function () {
+            URL.revokeObjectURL(url);
+          };
+          audio.play().catch(function () {});
+        })
+        .catch(function () {
+          speakWithBrowser(text);
+        });
+    }
+
+    function speak(text) {
+      if (!text || !voiceSettings.enabled) return;
+      if (voiceSettings.tts_provider === "google" && voiceSettings.google_tts_available) {
+        speakWithGoogle(text);
+        return;
+      }
+      if (!supported) return;
+      speakWithBrowser(text);
     }
 
     function shouldSpeak(fromVoice) {
@@ -457,6 +573,21 @@
     return line;
   }
 
+  function setFeedbackState(text, isError) {
+    var el = byId("feedback-state");
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("feedback-error", !!isError);
+  }
+
+  function setFeedbackSelection(helpful) {
+    selectedHelpful = helpful;
+    var up = byId("feedback-up");
+    var down = byId("feedback-down");
+    if (up) up.classList.toggle("active", helpful === true);
+    if (down) down.classList.toggle("active", helpful === false);
+  }
+
   function setChatBusy(busy) {
     var input = byId("chat-input");
     var send = byId("chat-send");
@@ -487,6 +618,16 @@
         if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
         var answer = (data && data.answer) || "No answer was returned.";
         appendChat("bot", answer);
+        latestInteraction = {
+          response_id: data && data.response_id ? data.response_id : "",
+          question: (body && body.question) || "",
+          answer: answer,
+          mode: (data && data.mode) || "footage",
+          source: (data && data.source) || "ledger",
+          path: (data && data.path) || "cloud_primary",
+        };
+        setFeedbackSelection(null);
+        setFeedbackState("Rate Sentinel's last answer to improve future responses.", false);
         if (Voice.shouldSpeak(fromVoice)) {
           Voice.speak(answer);
         }
@@ -494,7 +635,7 @@
       .catch(function () {
         if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
         var msg =
-          "Could not reach the dashboard. Check your connection and try again.";
+          "I couldn't reach the dashboard just now. If Sentinel is rebooting, wait ~20 seconds and ask again. If it keeps failing, reload this page and verify /status is reachable.";
         appendChat("bot", msg);
         if (Voice.shouldSpeak(fromVoice)) {
           Voice.speak(msg);
@@ -504,6 +645,51 @@
         setChatBusy(false);
         var input = byId("chat-input");
         if (input) input.focus();
+      });
+  }
+
+  function postFeedback() {
+    if (!latestInteraction) {
+      setFeedbackState("Ask a question first so there is an answer to rate.", true);
+      return;
+    }
+    var correction = byId("feedback-correction");
+    var remember = byId("feedback-remember");
+    var payload = {
+      response_id: latestInteraction.response_id,
+      question: latestInteraction.question,
+      answer: latestInteraction.answer,
+      mode: latestInteraction.mode,
+      source: latestInteraction.source,
+      path: latestInteraction.path,
+      helpful: selectedHelpful,
+      correction: correction ? correction.value.trim() : "",
+      remember_preference: remember ? !!remember.checked : false,
+    };
+    setFeedbackState("Saving feedback...", false);
+    fetch("/api/chat/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (data) {
+        if (data && data.ok) {
+          setFeedbackState("Feedback saved. Thanks - Sentinel will learn from this.", false);
+          if (correction) correction.value = "";
+          if (remember) remember.checked = false;
+          setFeedbackSelection(null);
+        } else {
+          setFeedbackState(
+            (data && data.message) || "Could not save feedback right now.",
+            true
+          );
+        }
+      })
+      .catch(function () {
+        setFeedbackState("Could not save feedback right now.", true);
       });
   }
 
@@ -526,6 +712,25 @@
       appendChat("you", "Summarize my day");
       postBrain("/api/summary", {}, "Summarizing your day...", false);
     });
+  }
+
+  var feedbackUp = byId("feedback-up");
+  if (feedbackUp) {
+    feedbackUp.addEventListener("click", function () {
+      setFeedbackSelection(true);
+      setFeedbackState("Marked as helpful. Add an optional note, then submit.", false);
+    });
+  }
+  var feedbackDown = byId("feedback-down");
+  if (feedbackDown) {
+    feedbackDown.addEventListener("click", function () {
+      setFeedbackSelection(false);
+      setFeedbackState("Marked as needs fix. Add correction text, then submit.", false);
+    });
+  }
+  var feedbackSubmit = byId("feedback-submit");
+  if (feedbackSubmit) {
+    feedbackSubmit.addEventListener("click", postFeedback);
   }
 
   Voice.initUi();

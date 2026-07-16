@@ -1,6 +1,8 @@
 # AI Home Sentinel — Pi-based home security camera
 
-Capture → motion → YOLO detection → face recognition → event ledger → reasoner → dashboard. Optional Grok "brain" for chat and daily recap. Phase 7b adds phone push alerts for tier-2 events via [ntfy.sh](https://ntfy.sh).
+Capture → motion → YOLO detection → face recognition → event ledger → reasoner → dashboard. Optional cloud "brain" (Google-first with Grok fallback) for chat and daily recap. Phase 7b adds phone push alerts for tier-2 events via [ntfy.sh](https://ntfy.sh).
+
+Canonical phase labels are tracked in [docs/ROADMAP_PHASES.md](docs/ROADMAP_PHASES.md).
 
 ## Quick start (laptop / dev)
 
@@ -21,7 +23,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-1. Copy `secrets.yaml.example` → `secrets.yaml` and add your `grok_api_key` (optional, for brain chat).
+1. Copy `secrets.yaml.example` → `secrets.yaml` and add your `google_api_key` (preferred) and/or `grok_api_key` (fallback).
 2. Edit `config.yaml` as needed.
 3. Run: `python run.py` → open http://localhost:5000
 
@@ -62,20 +64,36 @@ cp secrets.yaml.example secrets.yaml
 
 | Key | Purpose |
 |-----|---------|
-| `grok_api_key` | xAI Grok API key for brain chat/recap |
+| `google_api_key` | Google Generative AI key (preferred for provider=auto) |
+| `gcp_credentials_file` | Path to GCP service account JSON (Video Intelligence + TTS) — see [docs/GOOGLE_CLOUD.md](docs/GOOGLE_CLOUD.md) |
+| `grok_api_key` | xAI Grok API key fallback for brain chat/recap |
 | `ntfy_auth_token` | Optional; only for private ntfy.sh topics |
 
 ### 5. Known faces
 
-Drop labeled photos in `data/known_faces/` — filename (without extension) becomes the person's name:
+Known faces use person subfolders with `meta.json` and one or more photos:
 
 ```
 data/known_faces/
-  jordan.jpg
-  partner.jpg
+  owner_admin/
+    meta.json
+    enroll_001.jpg
+  partner/
+    meta.json
+    face_1.jpg
 ```
 
-Restart the service after adding faces. Unknown faces at night promote to tier 2.
+Restart the service after adding faces. Unknown face crops are saved under `data/events/unknown_faces`.
+
+### Owner enrollment (natural language)
+
+You do not need a rigid command. In dashboard chat, type something like:
+
+> I'm Jordan, make me the owner. I have tattoos and I'm about 6 ft.
+
+Sentinel infers enrollment intent, captures your live camera frame for face linkage, and stores an owner profile. The **Household profile** card on the dashboard shows enrollment status. Privileged API actions (resident profiles, owner preferences) require `actor_role: owner_admin` matching the enrolled owner name.
+
+Resident profiles support appearance signatures (height, build, tattoos, etc.) — not face-only identity.
 
 ### 6. Phone notifications (ntfy.sh)
 
@@ -107,6 +125,16 @@ Verify: `curl http://localhost:5000/health` and `python scripts/smoke_brain.py`
 
 See [docs/DEPLOY.md](docs/DEPLOY.md) for deploy steps from your laptop.
 
+### Quick command: refresh Cloudflare tunnel from Windows
+
+From a fresh PowerShell prompt:
+
+```powershell
+.\scripts\deploysshtunnel.ps1
+```
+
+What it does automatically: SSH test, installs `cloudflared` if needed, restarts a fresh quick tunnel, prints the new tunnel URL, and prints the exact `PI_BASE_URL=...` value to paste into Emergent Secrets before redeploying.
+
 ## Dashboard token auth
 
 Set in `config.yaml`:
@@ -114,10 +142,18 @@ Set in `config.yaml`:
 ```yaml
 dashboard:
   require_token: true
-  token: "your-secret-token"
+  token: ""   # leave empty; put the real value in secrets.yaml
+```
+
+In `secrets.yaml` (git-ignored):
+
+```yaml
+dashboard_token: "your-secret-token"
 ```
 
 Pass the token via query string (`?token=...`), header `Authorization: Bearer ...`, or `X-Sentinel-Token`. `/health` stays open for monitoring.
+
+See [docs/HOME_BETA.md](docs/HOME_BETA.md) for the home-beta checklist.
 
 ## Voice queries (testing)
 

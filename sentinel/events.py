@@ -1,7 +1,7 @@
 """Event Ledger module (Phase 3).
 
 Records every noticed thing in a single SQLite database with a locked schema
-used by all later phases. See ROADMAP.md Section 2 for the schema definition.
+used by all later phases. Canonical phase naming lives in docs/ROADMAP_PHASES.md.
 """
 
 from __future__ import annotations

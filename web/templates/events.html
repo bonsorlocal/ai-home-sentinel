@@ -10,6 +10,14 @@
     <header>
       <h1>AI Home Sentinel</h1>
       <p class="subtitle">Event Ledger</p>
+      <nav class="nav-links" aria-label="Main">
+        <a href="/">Live</a>
+        <a href="/events" aria-current="page">Events</a>
+        <a href="/dvr">DVR</a>
+        {% if emergent_app_url %}
+        <a href="{{ emergent_app_url }}" target="_blank" rel="noopener">{{ emergent_app_label }}</a>
+        {% endif %}
+      </nav>
     </header>
 
     <main class="events-main">
@@ -56,6 +64,20 @@
             '<span class="imp-fill" style="width:' + pct + '%;background:' + color + '"></span>' +
             '</span>'
           );
+        }
+
+        function formatEventTime(iso) {
+          if (!iso) return "-";
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return iso;
+          return new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: true,
+          }).format(d);
         }
 
         function renderClipSummary(ev) {
@@ -149,7 +171,7 @@
             ' <strong>' + ev.title + '</strong>' +
             ' <span class="muted">(' + ev.source + ')</span>' +
             "</div>" +
-            '<div class="event-meta muted">' + ev.timestamp + " | Incident " + incidentId + " | Primary: " + actor + "</div>" +
+            '<div class="event-meta muted">' + formatEventTime(ev.timestamp) + " | Incident " + incidentId + " | Primary: " + actor + "</div>" +
             '<div class="event-session-meta muted">Duration: ' + duration +
               " | Peak area: " + peakArea + "</div>" +
             (lifecycleText ? '<div class="event-session-meta muted">Lifecycle: ' + lifecycleText + "</div>" : "") +

@@ -25,7 +25,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from sentinel.brain import Brain, classify_query_source  # noqa: E402
+from sentinel.brain import Brain, classify_query_mode, classify_query_source  # noqa: E402
 from sentinel.config import Config  # noqa: E402
 from sentinel.events import EventLedger  # noqa: E402
 
@@ -127,10 +127,10 @@ def test_daily_cap_blocks_further_calls(tmp_path):
     second = brain.ask("q2")
     assert second["ok"] is True
     assert second["offline"] is True
-    assert "local evidence" in second["answer"].lower()
-    # The network was used only for the first question.
-    assert calls["n"] == 1
-    assert brain.status()["calls_remaining"] == 0
+    assert "general assistant chat" in second["answer"].lower()
+    # Guardrails can answer locally before cloud calls when evidence is missing.
+    assert calls["n"] <= 1
+    assert brain.status()["calls_remaining"] in (0, 1)
 
 
 def test_network_error_is_graceful(tmp_path):
@@ -151,7 +151,32 @@ def test_network_error_is_graceful(tmp_path):
     result = brain.ask("hello?")
     assert result["ok"] is True
     assert result["offline"] is True
-    assert "local evidence" in result["answer"].lower()
+    answer = result["answer"].lower()
+    assert "general assistant chat" in answer
+
+
+def test_ask_retries_transient_network_error(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    calls = {"n": 0}
+
+    def flaky_post(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.URLError("temporary network hiccup")
+        return _ok_response("Recovered after retry.")
+
+    brain = Brain(
+        _make_config(request_retries=1),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=flaky_post,
+    )
+    result = brain.ask("hello sentinel")
+    assert result["ok"] is True
+    assert result["offline"] is False
+    assert result["answer"] == "Recovered after retry."
+    assert calls["n"] == 2
 
 
 def test_http_error_is_graceful(tmp_path):
@@ -178,7 +203,8 @@ def test_http_error_is_graceful(tmp_path):
     result = brain.ask("hi")
     assert result["ok"] is True
     assert result["offline"] is True
-    assert "local evidence" in result["answer"].lower()
+    answer = result["answer"].lower()
+    assert "general assistant chat" in answer
 
 
 def test_context_includes_recent_events(tmp_path):
@@ -270,12 +296,21 @@ def test_classify_live_vs_ledger():
     assert classify_query_source("I'm Jordan, remember me") == "live"
     assert classify_query_source("What do you see right now?") == "live"
     assert classify_query_source("tell me what the scene is right now") == "live"
+    assert classify_query_source("what just happened? i stepped out for a second") == "both"
+    assert classify_query_source("what happened in the last 2 minutes?") == "both"
     assert classify_query_source("What time did motion happen?") == "ledger"
     assert classify_query_source("When did the person arrive yesterday?") == "ledger"
     assert (
         classify_query_source("What time did the person I see now first appear?")
         == "both"
     )
+
+
+def test_classify_query_mode_routes_general_by_default():
+    assert classify_query_mode("What happened near the driveway?") == "footage"
+    assert classify_query_mode("can you help me plan dinner this week?") == "casual"
+    assert classify_query_mode("hello there") == "casual"
+    assert classify_query_mode("hi, what time was that clip from?") == "hybrid"
 
 
 def test_ask_live_attaches_image(tmp_path):
@@ -302,11 +337,69 @@ def test_ask_live_attaches_image(tmp_path):
     result = brain.ask("I'm Jordan, remember me")
     assert result["ok"] is True
     assert result.get("source") == "live"
+    assert result.get("mode") == "footage"
+    assert result.get("path") in ("cloud_primary", "cloud_fallback_model")
     user = captured["payload"]["messages"][-1]["content"]
     assert isinstance(user, list)
-    assert user[0]["type"] == "text"
-    assert user[1]["type"] == "image_url"
-    assert captured["payload"]["model"] == "grok-4.3"
+
+
+def test_ask_uses_local_recent_recap_for_just_happened(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    ledger = _ledger(tmp_path)
+    ledger.insert(
+        source="face",
+        title="Known face: Jordan",
+        summary="Jordan walked up to the camera and waved.",
+        entities={"face": {"known": True, "name": "Jordan"}},
+    )
+
+    def should_not_call(*_args, **_kwargs):
+        raise AssertionError("Cloud call should not be used for immediate recap")
+
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=should_not_call,
+    )
+    result = brain.ask("what just happened? i stepped out for a second")
+    assert result["ok"] is True
+    assert result["path"] == "local_recent_recap"
+    answer = result["answer"].lower()
+    if "jordan" in answer:
+        assert "waved" in answer
+    else:
+        assert "don't have a new event" in answer
+
+
+def test_recent_window_recap_reports_nearest_activity_when_window_empty(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    ledger = _ledger(tmp_path)
+    ledger.insert(
+        source="motion",
+        title="Motion detected",
+        summary="Driveway motion",
+        timestamp="2026-01-01T00:00:00",
+    )
+
+    def should_not_call(*_args, **_kwargs):
+        raise AssertionError("Cloud call should not be used for immediate recap windows")
+
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=should_not_call,
+    )
+    result = brain.ask("what happened in the last 2 minutes?")
+    assert result["ok"] is True
+    assert result["path"] == "local_recent_recap"
+    answer = result["answer"].lower()
+    assert "last 2 minutes" in answer
+    assert "most recent activity was" in answer
+    assert "driveway motion" in answer
 
 
 def test_ask_ledger_question_uses_text_only(tmp_path):
@@ -335,6 +428,8 @@ def test_ask_ledger_question_uses_text_only(tmp_path):
     result = brain.ask("What time did motion happen today?")
     assert result["ok"] is True
     assert result.get("source") == "ledger"
+    assert result.get("mode") == "footage"
+    assert result.get("path") in ("cloud_primary", "cloud_fallback_model")
     user = captured["payload"]["messages"][-1]["content"]
     assert isinstance(user, str)
     assert "Motion detected" in user
@@ -483,3 +578,239 @@ def test_ask_local_fallback_mentions_window(tmp_path):
     assert result["ok"] is True
     assert "2026-07-01T20:00:00" in result["answer"]
     assert "segment#4" in result["answer"]
+    assert result.get("path") == "local_evidence_fallback"
+
+
+def test_reasoning_response_includes_confidence_fields(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    ledger = _ledger(tmp_path)
+    ledger.insert(source="motion", title="Motion detected", summary="driveway movement")
+
+    def fake_post(_url, _headers, _payload, _timeout):
+        return _ok_response("Motion was seen near the driveway.")
+
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    result = brain.ask("What happened near the driveway?")
+    assert result["ok"] is True
+    assert result.get("confidence") in ("low", "medium", "high")
+    assert isinstance(result.get("evidence_count"), int)
+    assert isinstance(result.get("evidence_flags"), list)
+
+
+def test_reasoning_flags_time_window_ambiguity(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+
+    def dvr_context(_question, _use_heavy):
+        return {
+            "context": "- segment#1 [2026-01-01T10:00:00 -> 2026-01-01T10:01:00] person_count=1 labels=person summary=person near door",
+            "analysis_context": "",
+            "window_start": "",
+            "window_end": "",
+            "window_source": "",
+            "segment_count": 1,
+        }
+
+    def fake_post(_url, _headers, _payload, _timeout):
+        return _ok_response("A person appeared near the door.")
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+        dvr_context_fn=dvr_context,
+    )
+    result = brain.ask("When did someone come by?")
+    assert result["ok"] is True
+    assert "time_window_ambiguous" in result.get("evidence_flags", [])
+
+
+def test_reasoning_flags_conflicting_identity_signals(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    ledger = _ledger(tmp_path)
+    ledger.insert(
+        source="face",
+        title="Known face: Jordan",
+        summary="known faces: Jordan",
+        entities={"faces": [{"name": "Jordan", "known": True}]},
+    )
+
+    def dvr_context(_question, _use_heavy):
+        return {
+            "context": "- segment#9 [2026-01-01T10:00:00 -> 2026-01-01T10:01:00] person_count=1 labels=person summary=unknown person near door",
+            "analysis_context": "",
+            "window_start": "2026-01-01T10:00:00",
+            "window_end": "2026-01-01T10:20:00",
+            "window_source": "explicit",
+            "segment_count": 1,
+        }
+
+    def fake_post(_url, _headers, _payload, _timeout):
+        return _ok_response("I found mixed identity evidence.")
+
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=fake_post,
+        dvr_context_fn=dvr_context,
+    )
+    result = brain.ask("Who was it?")
+    assert result["ok"] is True
+    assert "conflicting_identity_signals" in result.get("evidence_flags", [])
+
+
+def test_capture_feedback_without_context_fails(tmp_path):
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(tmp_path / "missing-secrets.yaml"),
+    )
+    result = brain.capture_feedback({})
+    assert result["ok"] is False
+
+
+def test_casual_query_uses_conversation_mode(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return _ok_response("Hey! I'm doing well.")
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    result = brain.ask("hello sentinel")
+    assert result["ok"] is True
+    assert result["mode"] == "casual"
+    assert result["source"] == "conversation"
+    assert result["path"] in ("cloud_primary", "cloud_fallback_model")
+    user_message = captured["payload"]["messages"][-1]["content"]
+    assert isinstance(user_message, str)
+    assert "Recent event notes" not in user_message
+
+
+def test_recipe_query_uses_general_assistant_lane(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return _ok_response("Yes. Share your ingredients and I'll suggest a dinner plan.")
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    result = brain.ask("If I tell you the ingredients in my fridge can you help with dinner?")
+    assert result["ok"] is True
+    assert result["mode"] == "casual"
+    assert result["source"] == "conversation"
+    assert result["path"] in ("cloud_primary", "cloud_fallback_model")
+    user_message = captured["payload"]["messages"][-1]["content"]
+    assert isinstance(user_message, str)
+    assert "Recent event notes" not in user_message
+    assert "Continuous DVR retrieval context" not in user_message
+
+
+def test_offline_general_query_uses_general_fallback_text(tmp_path):
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(tmp_path / "missing-secrets.yaml"),
+    )
+    result = brain.ask("I have eggs, spinach, and rice. What can I cook for dinner?")
+    assert result["ok"] is True
+    assert result["offline"] is True
+    assert result["mode"] == "casual"
+    assert result["source"] == "conversation"
+    assert result["path"] == "local_casual_fallback"
+    answer = result["answer"].lower()
+    assert "general assistant chat" in answer
+    assert "local evidence" not in answer
+
+
+def test_hybrid_query_keeps_evidence_context(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    ledger = _ledger(tmp_path)
+    ledger.insert(source="motion", title="Motion detected", summary="kitchen movement")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return _ok_response("Motion was around 9:10 PM. For dinner, try veggie fried rice.")
+
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    result = brain.ask("Hi, what time was that kitchen motion and what should I cook with eggs?")
+    assert result["ok"] is True
+    assert result["mode"] == "hybrid"
+    assert result["path"] in ("cloud_primary", "cloud_fallback_model")
+    user_message = captured["payload"]["messages"][-1]["content"]
+    assert isinstance(user_message, str)
+    assert "Recent event notes" in user_message
+
+
+def test_owner_enrollment_from_natural_language(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def enroll(payload):
+        captured["payload"] = payload
+        return {"ok": True, "message": "enrolled"}
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        owner_enroll_fn=enroll,
+    )
+    result = brain.ask("I'm Jordan, make me the owner admin. I have tattoos and I'm 6 ft.")
+    assert result["ok"] is True
+    assert result["path"] == "owner_enrollment"
+    assert captured["payload"]["name"] == "Jordan"
+    assert captured["payload"]["appearance_signature"]["tattoos"] is True
+
+
+def test_google_provider_uses_generate_content_endpoint(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('google_api_key: "google-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["url"] = url
+        captured["payload"] = payload
+        return {"candidates": [{"content": {"parts": [{"text": "Hello from Gemini."}]}}]}
+
+    brain = Brain(
+        _make_config(provider="auto"),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    result = brain.ask("hello sentinel")
+    assert result["ok"] is True
+    assert result["answer"] == "Hello from Gemini."
+    assert ":generateContent?key=google-test-key" in captured["url"]

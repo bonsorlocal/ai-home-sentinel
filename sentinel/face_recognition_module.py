@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -194,6 +195,19 @@ class FaceRecognizer:
 
         self._reload_known_faces()
         return True
+
+    def save_unknown_face(self, frame) -> Optional[str]:
+        """Persist an unknown-face crop in unknown_faces_dir."""
+        if frame is None or cv2 is None:
+            return None
+        ts = int(time.time())
+        name = f"unknown_{ts}_{uuid.uuid4().hex[:8]}.jpg"
+        path = os.path.join(self._unknown_dir, name)
+        try:
+            ok = cv2.imwrite(path, frame)
+            return path if ok else None
+        except Exception:  # noqa: BLE001
+            return None
 
     def match_frame(self, frame) -> List[Dict[str, Any]]:
         """Find and identify faces in a frame."""

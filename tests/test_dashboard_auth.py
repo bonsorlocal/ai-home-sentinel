@@ -71,3 +71,22 @@ def test_query_token_sets_cookie_for_followup_api_calls():
     assert "sentinel_dashboard_token=" in (first.headers.get("Set-Cookie") or "")
     second = client.get("/api/events")
     assert second.status_code == 200
+
+
+def test_token_from_secrets_file(tmp_path, monkeypatch):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('dashboard_token: "from-secrets"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    config = Config(
+        {
+            "dashboard": {
+                "require_token": True,
+                "token": "",
+                "secrets_file": "secrets.yaml",
+            }
+        }
+    )
+    app = create_app(config)
+    client = app.test_client()
+    assert client.get("/status").status_code == 401
+    assert client.get("/status?token=from-secrets").status_code == 200

@@ -20,9 +20,11 @@ def _cfg(enabled: bool = True) -> Config:
         {
             "video_metadata": {
                 "enabled": enabled,
-                "provider": "grok",
+                "provider": "auto",
                 "base_url": "https://api.x.ai/v1",
                 "model": "grok-4.3",
+                "google_base_url": "https://generativelanguage.googleapis.com/v1beta",
+                "google_model": "gemini-1.5-flash",
                 "max_keyframes": 3,
                 "daily_call_cap": 10,
                 "request_timeout_seconds": 2,
@@ -66,3 +68,30 @@ def test_worker_updates_entities(tmp_path, monkeypatch):
         assert updated.entities.get("clip_analysis", {}).get("scene_summary")
     finally:
         worker.stop()
+
+
+def test_google_provider_analysis_path(tmp_path, monkeypatch):
+    ledger = EventLedger(str(tmp_path / "events.db"))
+    monkeypatch.setattr(ClipMetadataWorker, "_load_api_key", lambda self: "")
+    monkeypatch.setattr(ClipMetadataWorker, "_load_google_api_key", lambda self: "google-test")
+    worker = ClipMetadataWorker(_cfg(enabled=True), ledger)
+    monkeypatch.setattr(worker, "_extract_keyframes", lambda _clip, max_frames=3: [b"a", b"b"])
+    captured = {}
+
+    def fake_post(url, *, headers, payload, timeout):
+        captured["url"] = url
+        captured["payload"] = payload
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": '{"scene_summary":"porch","actors":["person"],"actions":["approach"],"confidence":0.8,"key_events":["person approached porch"]}'}]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(worker, "_post_json", fake_post)
+    parsed = worker._analyze_clip("/tmp/clip.mp4")
+    assert parsed["scene_summary"] == "porch"
+    assert ":generateContent?key=google-test" in captured["url"]

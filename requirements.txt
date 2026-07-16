@@ -15,6 +15,9 @@ opencv-python>=4.8    # USB-webcam capture (VideoCapture) + JPEG encoding
                       # take a few minutes. If it ever fails, you can instead
                       # run: sudo apt install -y python3-opencv
 
+google-auth>=2.29.0     # GCP service account tokens (Video Intelligence + TTS)
+requests>=2.31.0        # HTTP client (Pi bridge + cloud integrations)
+
 # Testing
 pytest>=8.0
 

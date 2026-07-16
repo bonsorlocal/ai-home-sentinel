@@ -1,0 +1,29 @@
+---
+description: Run deploysshtunnel shortcut and assist Emergent redeploy flow
+alwaysApply: true
+---
+
+# `/deploysshtunnel` shortcut
+
+When the user sends `/deploysshtunnel` (optionally with extra words), treat it as a request to run:
+
+```powershell
+.\scripts\deploysshtunnel.ps1
+```
+
+Behavior:
+
+1. Run the script from the workspace root unless the user explicitly gives a different `-PiHost`.
+2. Extract the printed tunnel URL and the exact `PI_BASE_URL=...` value from the script output.
+3. Reply with:
+   - the tunnel URL,
+   - the exact `PI_BASE_URL` value to use,
+   - a short confirmation that Emergent must be updated and redeployed.
+4. If the user also wants help updating Emergent and browser/UI automation is available, assist with the Secrets + redeploy steps using the current Emergent tab/context.
+5. If browser automation is not available or Emergent auth/state blocks automation, give concise click-by-click instructions instead of stopping.
+
+Constraints:
+
+- Never invent a tunnel URL; only use the one returned by the script.
+- Never edit `secrets.yaml` or commit anything as part of this shortcut.
+- If the script fails, report the exact failing stage (SSH, Sentinel health, cloudflared startup, or URL extraction) and suggest the next recovery step.

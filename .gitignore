@@ -15,6 +15,7 @@ env/
 # Secrets - NEVER commit
 secrets.yaml
 secrets.yml
+secrets/gcp-service-account.json
 *.key
 *.pem
 
