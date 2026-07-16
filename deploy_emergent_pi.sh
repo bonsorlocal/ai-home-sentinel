@@ -125,7 +125,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     fi
   fi
   info "Building frontend (REACT_APP_BACKEND_URL='' -> relative /api, same origin)"
-  ( cd "$FRONTEND" && REACT_APP_BACKEND_URL="" yarn install --frozen-lockfile && REACT_APP_BACKEND_URL="" yarn build )
+  ( cd "$FRONTEND" && REACT_APP_BACKEND_URL="" yarn install --network-timeout 600000 && REACT_APP_BACKEND_URL="" yarn build )
 fi
 [[ -f "$FRONTEND/build/index.html" ]] || { echo "Frontend build missing — run without --skip-build first." >&2; exit 1; }
 
