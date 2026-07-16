@@ -108,10 +108,21 @@ PY="$VENV/bin/python"
 # 3) Frontend build (relative /api => same origin on :PORT)
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   if ! command -v yarn >/dev/null 2>&1; then
-    warn "yarn/node not found — installing (needs sudo)"
-    sudo apt-get update -y
-    sudo apt-get install -y nodejs npm
-    sudo npm install -g yarn
+    if command -v corepack >/dev/null 2>&1; then
+      warn "Enabling yarn via corepack (Node built-in)"
+      sudo corepack enable >/dev/null 2>&1 || true
+      corepack prepare yarn@stable --activate >/dev/null 2>&1 || true
+    fi
+    if ! command -v yarn >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+      warn "Installing yarn via npm"
+      sudo npm install -g yarn
+    fi
+    if ! command -v yarn >/dev/null 2>&1; then
+      warn "Node not found — installing nodejs then yarn (needs sudo)"
+      sudo apt-get update -y
+      sudo apt-get install -y nodejs   # NOTE: do NOT apt-install npm (conflicts with NodeSource node)
+      sudo npm install -g yarn
+    fi
   fi
   info "Building frontend (REACT_APP_BACKEND_URL='' -> relative /api, same origin)"
   ( cd "$FRONTEND" && REACT_APP_BACKEND_URL="" yarn install --frozen-lockfile && REACT_APP_BACKEND_URL="" yarn build )
