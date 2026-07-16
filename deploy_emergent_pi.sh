@@ -98,6 +98,9 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   fi
   "$VENV/bin/pip" install --upgrade pip >/dev/null
   "$VENV/bin/pip" install -r "$BACKEND/requirements.txt"
+  info "Installing Sentinel AI library (optional — camera works without it)"
+  "$VENV/bin/pip" install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+    || warn "emergentintegrations not installed — AI chat disabled, camera/events unaffected."
 fi
 PY="$VENV/bin/python"
 [[ -x "$PY" ]] || PY="python3"

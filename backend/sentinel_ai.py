@@ -1,7 +1,6 @@
 """Sentinel AI: Event-Log-first, DVR-fallback retrieval + Gemini grounded reasoning."""
 import os
 import logging
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger(__name__)
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
@@ -101,6 +100,11 @@ def build_context(question, events, segments, people, cameras, rules, settings):
 async def ask_sentinel(session_id, question, context_str):
     if not EMERGENT_LLM_KEY:
         return "AI is not configured: missing EMERGENT_LLM_KEY."
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except ImportError:
+        return ("Sentinel AI library (emergentintegrations) is not installed on this device. "
+                "The camera and events still work; install it to enable chat.")
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=session_id,
