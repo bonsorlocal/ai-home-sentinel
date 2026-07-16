@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@400;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0A0A0A;
+  --surface: #141416;
+  --surface-hover: #1C1C1F;
+  --border: #27272A;
+  --accent: #007AFF;
+}
+
+* { border-color: var(--border); }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: #FFFFFF;
+  font-family: 'IBM Plex Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { font-family: 'Chivo', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', monospace; }
+
+.micro-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #71717A;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0A0A0A; }
+::-webkit-scrollbar-thumb { background: #27272A; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #3F3F46; }
+
+::selection { background: #007AFF; color: #fff; }
+
+@keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.live-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fade-up 0.2s ease-out both; }
+
+.scanline {
+  background-image: repeating-linear-gradient(0deg, rgba(0,122,255,0.03) 0px, rgba(0,122,255,0.03) 1px, transparent 1px, transparent 3px);
+}
