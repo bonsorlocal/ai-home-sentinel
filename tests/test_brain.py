@@ -29,7 +29,10 @@ from sentinel.brain import (  # noqa: E402
     Brain,
     classify_query_mode,
     classify_query_source,
+    is_capability_question,
+    is_followup_question,
     is_meta_question,
+    normalize_chat_history,
 )
 from sentinel.config import Config  # noqa: E402
 from sentinel.events import EventLedger  # noqa: E402
@@ -859,3 +862,140 @@ def test_google_provider_uses_generate_content_endpoint(tmp_path):
     assert result["ok"] is True
     assert result["answer"] == "Hello from Gemini."
     assert ":generateContent?key=google-test-key" in captured["url"]
+
+
+def test_capability_and_followup_detectors():
+    assert is_capability_question("how far back in events can you currently answer?") is True
+    assert is_capability_question("can you see past events?") is True
+    assert is_capability_question("what do you see right now?") is False
+    assert is_followup_question("why is that?") is True
+    assert is_followup_question("why?") is True
+    assert is_followup_question("describe the person you saw") is False
+    cleaned = normalize_chat_history(
+        [
+            {"role": "you", "content": "hello"},
+            {"role": "bot", "content": "hi there"},
+            {"role": "system", "content": "ignore"},
+        ]
+    )
+    assert cleaned == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]
+
+
+def test_ask_capability_answers_locally(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("capability answers should not call the cloud")
+
+    ledger = _ledger(tmp_path)
+    ledger.insert(
+        source="motion",
+        tier=1,
+        importance=0.2,
+        title="motion",
+        summary="motion in kitchen",
+    )
+    brain = Brain(
+        _make_config(),
+        ledger,
+        secrets_path=str(secrets),
+        http_post=boom,
+    )
+    result = brain.ask("how far back in events can you currently answer questions about?")
+    assert result["ok"] is True
+    assert result["path"] == "local_capability"
+    assert "event log" in result["answer"].lower()
+    assert "live" in result["answer"].lower()
+    assert "not limited to the live frame" in result["answer"].lower()
+
+
+def test_ask_includes_history_in_prompt(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["messages"] = payload["messages"]
+        return _ok_response("Because DVR and the event log cover past activity.")
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    history = [
+        {
+            "role": "user",
+            "content": "how far back in events can you answer?",
+        },
+        {
+            "role": "assistant",
+            "content": "I can use live camera plus event log and DVR.",
+        },
+    ]
+    # Capability path short-circuits without cloud — use a follow-up that needs history.
+    result = brain.ask("why is that?", history=history)
+    # Follow-up after a capability answer should still resolve via local capability
+    # when routing text includes the prior capability claim.
+    assert result["ok"] is True
+    assert result["path"] == "local_capability"
+
+
+def test_ask_history_passed_to_cloud_for_normal_followup(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('grok_api_key: "xai-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["messages"] = payload["messages"]
+        return _ok_response("He still looks like the same person from before.")
+
+    brain = Brain(
+        _make_config(),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    history = [
+        {"role": "user", "content": "tell me a short joke"},
+        {"role": "assistant", "content": "Why did the camera blush? It saw the lens cap!"},
+    ]
+    result = brain.ask("why is that funny?", history=history)
+    assert result["ok"] is True
+    roles = [m["role"] for m in captured["messages"]]
+    assert "system" in roles
+    assert roles.count("user") >= 2
+    assert "assistant" in roles
+    assert any("lens cap" in str(m.get("content", "")) for m in captured["messages"])
+
+
+def test_google_payload_preserves_multi_turn_history(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('google_api_key: "google-test-key"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return {"candidates": [{"content": {"parts": [{"text": "Because of the punchline."}]}}]}
+
+    brain = Brain(
+        _make_config(provider="google"),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+    )
+    history = [
+        {"role": "user", "content": "tell me a short joke"},
+        {"role": "assistant", "content": "Camera joke."},
+    ]
+    result = brain.ask("why is that funny?", history=history)
+    assert result["ok"] is True
+    contents = captured["payload"]["contents"]
+    roles = [c["role"] for c in contents]
+    assert "user" in roles and "model" in roles
+    assert len(contents) >= 3

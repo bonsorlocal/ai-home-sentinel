@@ -15,6 +15,7 @@ Expected Pi endpoints (the contract the Pi service must expose):
 import os
 import time
 import logging
+import json
 import httpx
 
 logger = logging.getLogger("pi")
@@ -23,28 +24,94 @@ PI_BASE_URL = os.environ.get("PI_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 STATUS_TIMEOUT = float(os.environ.get("PI_STATUS_TIMEOUT", "3.0"))
 DATA_TIMEOUT = float(os.environ.get("PI_DATA_TIMEOUT", "6.0"))
 
+# #region agent log
+_DEBUG_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug-8992b8.log"
+)
+
+
+def _agent_log(hypothesis_id: str, location: str, message: str, data=None):
+    try:
+        payload = {
+            "sessionId": "8992b8",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+# #endregion
+
 
 async def check_status():
     """Health-check the Pi. Returns (online: bool, raw_status: dict|None)."""
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=STATUS_TIMEOUT) as c:
             r = await c.get(f"{PI_BASE_URL}/status")
             r.raise_for_status()
+            # #region agent log
+            _agent_log(
+                "A",
+                "pi_client.check_status",
+                "status_ok",
+                {"ms": int((time.time() - t0) * 1000), "code": r.status_code},
+            )
+            # #endregion
             return True, r.json()
     except Exception as e:  # noqa: BLE001 - any failure means Pi is offline
         logger.warning(f"Pi /status unreachable at {PI_BASE_URL}: {e}")
+        # #region agent log
+        _agent_log(
+            "A",
+            "pi_client.check_status",
+            "status_fail",
+            {"ms": int((time.time() - t0) * 1000), "error": str(e)[:200]},
+        )
+        # #endregion
         return False, None
 
 
 async def get_json(path):
     """GET JSON from the Pi. Returns parsed body or None if unreachable."""
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=DATA_TIMEOUT) as c:
             r = await c.get(f"{PI_BASE_URL}{path}")
             r.raise_for_status()
-            return r.json()
+            body = r.json()
+            # #region agent log
+            _agent_log(
+                "B" if "dvr" in path else "A",
+                "pi_client.get_json",
+                "get_ok",
+                {
+                    "path": path,
+                    "ms": int((time.time() - t0) * 1000),
+                    "code": r.status_code,
+                    "type": type(body).__name__,
+                },
+            )
+            # #endregion
+            return body
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Pi GET {path} failed: {e}")
+        # #region agent log
+        _agent_log(
+            "B" if "dvr" in path else "A",
+            "pi_client.get_json",
+            "get_fail",
+            {
+                "path": path,
+                "ms": int((time.time() - t0) * 1000),
+                "error": str(e)[:200],
+            },
+        )
+        # #endregion
         return None
 
 
@@ -180,9 +247,18 @@ async def video_reachable():
     now = time.time()
     if now - _video_ok_cache["ts"] < _OK_TTL:
         return _video_ok_cache["ok"]
+    t0 = time.time()
     url = await resolve_video_url()
     ok = (await _probe(url))[0] if url else False
     _video_ok_cache.update(ok=ok, ts=now)
+    # #region agent log
+    _agent_log(
+        "E",
+        "pi_client.video_reachable",
+        "probe_done",
+        {"ok": ok, "url": url, "ms": int((time.time() - t0) * 1000)},
+    )
+    # #endregion
     return ok
 
 
@@ -199,13 +275,56 @@ async def open_video_stream():
 
     async def generator():
         try:
-            async for chunk in resp.aiter_raw():
+            # Small chunks reduce proxy buffering so the browser paints sooner.
+            async for chunk in resp.aiter_bytes(chunk_size=16 * 1024):
                 yield chunk
         finally:
             await resp.aclose()
             await client.aclose()
 
     return generator, content_type
+
+
+async def fetch_live_jpeg(since: int = -1):
+    """Fetch one paced JPEG from Sentinel ``/api/live.jpg`` (optional long-poll)."""
+    params = {}
+    if since is not None and int(since) >= 0:
+        params["since"] = int(since)
+    timeout = httpx.Timeout(connect=3.0, read=4.0, write=4.0, pool=4.0)
+    t0 = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{PI_BASE_URL}/api/live.jpg", params=params)
+            r.raise_for_status()
+            count_header = r.headers.get("X-Stream-Count", "")
+            try:
+                stream_count = int(count_header) if count_header != "" else -1
+            except ValueError:
+                stream_count = -1
+            # #region agent log
+            _agent_log(
+                "A",
+                "pi_client.fetch_live_jpeg",
+                "jpeg_ok",
+                {
+                    "since": since,
+                    "bytes": len(r.content),
+                    "stream_count": stream_count,
+                    "ms": int((time.time() - t0) * 1000),
+                },
+            )
+            # #endregion
+            return r.content, stream_count
+    except Exception as e:  # noqa: BLE001
+        # #region agent log
+        _agent_log(
+            "A",
+            "pi_client.fetch_live_jpeg",
+            "jpeg_fail",
+            {"since": since, "ms": int((time.time() - t0) * 1000), "error": str(e)[:200]},
+        )
+        # #endregion
+        raise
 
 
 async def diagnostics():

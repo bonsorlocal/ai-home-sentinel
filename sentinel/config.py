@@ -204,6 +204,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "memory_max_entries": 300,
         "memory_max_context_items": 8,
         "memory_retention_days": 90,
+        "max_chat_history_turns": 10,
         "secrets_file": "secrets.yaml",
     },
     "video_metadata": {

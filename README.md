@@ -35,6 +35,10 @@ Windows shortcut (creates the overlay if missing, then starts the dashboard):
 
 If the wrong camera opens, set `camera.index` to `1` in `config.local.yaml`. Allow Cursor/Python camera access in Windows Settings → Privacy → Camera. Face enrollment stays Pi-only (`face_recognition` is off in the PC overlay).
 
+### Base44 (optional product UI)
+
+Ready-to-import pack (OpenAPI + prompt + walkthrough): [base44-import/START_HERE.md](base44-import/START_HERE.md)
+
 ### Full product UI on PC (Emergent)
 
 With Sentinel already on `:5000`, and `google_api_key` + `mongo_atlas_url` in `secrets.yaml`:

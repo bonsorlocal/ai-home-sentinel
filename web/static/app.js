@@ -28,6 +28,17 @@
   };
   var latestInteraction = null;
   var selectedHelpful = null;
+  var chatHistory = [];
+  var MAX_CHAT_HISTORY = 10;
+
+  function pushChatHistory(role, content) {
+    var text = (content || "").toString().trim();
+    if (!text) return;
+    chatHistory.push({ role: role, content: text });
+    if (chatHistory.length > MAX_CHAT_HISTORY) {
+      chatHistory = chatHistory.slice(-MAX_CHAT_HISTORY);
+    }
+  }
 
   function byId(id) {
     return document.getElementById(id);
@@ -606,10 +617,15 @@
     var pending = appendChat("bot", pendingText);
     if (pending) pending.classList.add("chat-pending");
 
+    var payload = Object.assign({}, body || {});
+    if (url.indexOf("/api/chat") !== -1) {
+      payload.history = chatHistory.slice();
+    }
+
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(payload),
     })
       .then(function (response) {
         return response.json();
@@ -618,9 +634,17 @@
         if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
         var answer = (data && data.answer) || "No answer was returned.";
         appendChat("bot", answer);
+        if (url.indexOf("/api/chat") !== -1 || url.indexOf("/api/summary") !== -1) {
+          if (payload.question) {
+            pushChatHistory("user", payload.question);
+          } else if (url.indexOf("/api/summary") !== -1) {
+            pushChatHistory("user", "Summarize my day");
+          }
+          pushChatHistory("assistant", answer);
+        }
         latestInteraction = {
           response_id: data && data.response_id ? data.response_id : "",
-          question: (body && body.question) || "",
+          question: (payload && payload.question) || "",
           answer: answer,
           mode: (data && data.mode) || "footage",
           source: (data && data.source) || "ledger",

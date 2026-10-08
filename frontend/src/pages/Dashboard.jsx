@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { getHealth, getCameras, getEvents, getSettings, updateSettings, askAssistant, streamUrl } from "@/lib/api";
+import { getHealth, getCameras, getEvents, getSettings, updateSettings, askAssistant, liveJpegUrl } from "@/lib/api";
 import { Panel, PanelHeader, LiveTag, OfflineBanner, EmptyState, TypePill, ImportanceBadge, fmtTime } from "@/components/common";
 import { Warning, Cpu, Thermometer, HardDrives, VideoCamera, PaperPlaneRight, House, Airplane, MoonStars } from "@phosphor-icons/react";
 import { toast } from "sonner";
@@ -93,18 +93,7 @@ export default function Dashboard() {
           ) : (
           <div className="grid grid-cols-2 gap-px bg-[#27272A]">
             {cameras.map((c) => (
-              <div key={c.id} data-testid={`cam-tile-${c.id}`} className="relative aspect-video bg-[#0A0A0A] scanline overflow-hidden group">
-                <img src={streamUrl(c.id)} alt={c.name} data-testid={`cam-stream-${c.id}`}
-                  className="w-full h-full object-cover"
-                  onError={(e) => { e.currentTarget.style.display = "none"; e.currentTarget.nextSibling.style.display = "flex"; }} />
-                <div className="w-full h-full items-center justify-center text-[#3F3F46] font-mono text-xs" style={{ display: "none" }}>STREAM UNAVAILABLE</div>
-                <div className="absolute top-2 left-2 flex items-center gap-2">
-                  <span className="micro-label bg-black/60 px-1.5 py-0.5" style={{ color: "#fff" }}>{c.name}</span>
-                </div>
-                <div className="absolute top-2 right-2">
-                  <span className={`w-2 h-2 rounded-full inline-block ${c.status === "online" ? "bg-[#34C759] live-dot" : "bg-[#71717A]"}`} />
-                </div>
-              </div>
+              <DashboardCamTile key={c.id} camera={c} />
             ))}
           </div>
           )}
@@ -178,6 +167,64 @@ export default function Dashboard() {
             <Link to="/sentinel" className="micro-label hover:text-white inline-block">OPEN FULL ASSISTANT →</Link>
           </div>
         </Panel>
+      </div>
+    </div>
+  );
+}
+
+function DashboardCamTile({ camera: c }) {
+  const [src, setSrc] = useState("");
+  const [failed, setFailed] = useState(false);
+  const objectUrlRef = useRef("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let since = -1;
+    const revoke = () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = "";
+      }
+    };
+    const tick = async () => {
+      while (!cancelled) {
+        try {
+          const res = await fetch(liveJpegUrl(since), { cache: "no-store" });
+          if (!res.ok) throw new Error("jpeg");
+          const countHeader = res.headers.get("X-Stream-Count");
+          if (countHeader) {
+            const n = parseInt(countHeader, 10);
+            if (!Number.isNaN(n)) since = n;
+          }
+          const blob = await res.blob();
+          if (cancelled) break;
+          const next = URL.createObjectURL(blob);
+          revoke();
+          objectUrlRef.current = next;
+          setSrc(next);
+          setFailed(false);
+        } catch {
+          if (!cancelled) setFailed(true);
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+      }
+    };
+    tick();
+    return () => { cancelled = true; revoke(); };
+  }, [c.id]);
+
+  return (
+    <div data-testid={`cam-tile-${c.id}`} className="relative aspect-video bg-[#0A0A0A] overflow-hidden group">
+      {src && !failed ? (
+        <img src={src} alt={c.name} data-testid={`cam-stream-${c.id}`} className="w-full h-full object-cover" draggable={false} />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-[#3F3F46] font-mono text-xs">STREAM UNAVAILABLE</div>
+      )}
+      <div className="absolute top-2 left-2 flex items-center gap-2">
+        <span className="micro-label bg-black/60 px-1.5 py-0.5" style={{ color: "#fff" }}>{c.name}</span>
+      </div>
+      <div className="absolute top-2 right-2">
+        <span className={`w-2 h-2 rounded-full inline-block ${c.status === "online" && !failed ? "bg-[#34C759] live-dot" : "bg-[#71717A]"}`} />
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ The browser only ever calls /api/* on this backend (same origin) — never the P
 See PI_INTEGRATION.md for the pull contract the Pi service must expose.
 """
 from fastapi import FastAPI, APIRouter, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -87,9 +87,28 @@ HEARTBEAT_TTL_SECONDS = 30  # (legacy push contract) still supported for Pi-push
 @api.get("/system/health")
 async def system_health():
     """Live-data-first: reflect the real Pi. 'Connected' if /status OR the camera feed responds."""
+    # #region agent log
+    import time as _time
+    _t0 = _time.time()
+    # #endregion
     settings = await db.settings.find_one({"id": "system"}, NO_ID) or {}
     online, raw = await pi_client.check_status()
     video_ok = await pi_client.video_reachable()
+    # #region agent log
+    try:
+        pi_client._agent_log(
+            "A",
+            "server.system_health",
+            "health_done",
+            {
+                "online": online,
+                "video_ok": video_ok,
+                "ms": int((_time.time() - _t0) * 1000),
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
     if not (online or video_ok):
         return {
             "pi_connected": False, "is_demo": False, "offline": True,
@@ -125,8 +144,16 @@ async def _camera_stream_response():
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Camera stream proxy failed: {e}")
         raise HTTPException(503, "Camera stream unavailable — Pi camera pipeline unreachable")
-    return StreamingResponse(generator(), media_type=content_type,
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        generator(),
+        media_type=content_type,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @api.get("/camera/stream")
@@ -138,6 +165,25 @@ async def camera_stream(camera: Optional[str] = None):
 @api.get("/pi/stream")
 async def pi_stream_proxy(camera: Optional[str] = None):
     return await _camera_stream_response()
+
+
+@api.get("/camera/live.jpg")
+async def camera_live_jpeg(since: int = -1):
+    """Paced single JPEG for smoother UI (avoids buffered MJPEG-through-proxy stutter)."""
+    try:
+        jpeg, stream_count = await pi_client.fetch_live_jpeg(since=since)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Live JPEG proxy failed: {e}")
+        raise HTTPException(503, "Live JPEG unavailable — Pi camera pipeline unreachable")
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Accel-Buffering": "no",
+    }
+    if stream_count >= 0:
+        headers["X-Stream-Count"] = str(stream_count)
+    return Response(content=jpeg, media_type="image/jpeg", headers=headers)
 
 
 @api.get("/camera/diagnostics")
@@ -220,7 +266,22 @@ async def toggle_save(event_id: str, saved: bool = True):
 # ---------------- DVR (proxied from Pi) ----------------
 @api.get("/dvr/segments")
 async def list_segments(camera_id: Optional[str] = None, search: Optional[str] = None, limit: int = 200):
-    data = pi_client.as_list(await pi_client.get_json("/api/dvr/segments"), "segments")
+    raw = await pi_client.get_json("/api/dvr/segments")
+    data = pi_client.as_list(raw, "segments")
+    # #region agent log
+    try:
+        pi_client._agent_log(
+            "B",
+            "server.list_segments",
+            "segments_result",
+            {
+                "raw_is_none": raw is None,
+                "count": 0 if data is None else len(data),
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
     if data is None:
         return []
     segs = data

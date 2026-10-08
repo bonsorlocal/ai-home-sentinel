@@ -16,7 +16,15 @@ export default function EventLog() {
   useEffect(() => {
     const params = { saved: true };
     Object.entries(f).forEach(([k, v]) => { if (v) params[k] = v; });
-    getEvents(params).then(setEvents);
+    // #region agent log
+    fetch('http://127.0.0.1:7299/ingest/34cdb022-c150-43bb-bf0e-bdec896e189e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8992b8'},body:JSON.stringify({sessionId:'8992b8',hypothesisId:'C',location:'EventLog.jsx:load',message:'event_log_query',data:{params},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    getEvents(params).then((rows) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7299/ingest/34cdb022-c150-43bb-bf0e-bdec896e189e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8992b8'},body:JSON.stringify({sessionId:'8992b8',hypothesisId:'C',location:'EventLog.jsx:load',message:'event_log_result',data:{count:Array.isArray(rows)?rows.length:-1},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      setEvents(rows);
+    });
   }, [f]);
 
   const inputCls = "bg-[#0A0A0A] border border-[#27272A] text-white rounded-sm px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-[#007AFF]";

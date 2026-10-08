@@ -1,0 +1,30 @@
+Build a polished home security web app for AI Home Sentinel using my workspace custom integration slug: sentinel-api.
+
+If that integration exists, use it for ALL live data (status, events, live JPEG, DVR, chat). Do not invent camera events, fake people, or fake video.
+
+Product name: AI Home Sentinel
+Tone: calm, modern, trustworthy home security — not neon cyberpunk.
+
+Pages / sections:
+1) Live — show the live camera by polling getLiveJpeg every 1–2 seconds (prefer JPEG polling over MJPEG iframe). Show connection status from getStatus (camera online, detector, brain).
+2) Events — list recent events from listEvents with time, title, summary, tier. Newest first. Clicking an event can show details.
+3) DVR — show getDvrStatus (recording active, retention, storage). Optionally list segments from getDvrRange when useful.
+4) Sentinel AI chat — ChatGPT-style conversation. Each send must call postChat with JSON:
+   {
+     "question": "<latest user message>",
+     "history": [ ... last up to 10 prior turns as {"role":"user"|"assistant","content":"..."} ]
+   }
+   Keep history in the UI so follow-ups like "why is that?" and "him" work. Show a pending/thinking state while waiting.
+
+Also include a compact header with:
+- App name
+- Online / offline badge from getStatus or getHealth
+- Refresh control
+
+Rules:
+- Never claim sightings that are not in API data.
+- If the API fails, show a clear reconnect message and last known status.
+- Mobile-friendly layout; one clear primary view on phones.
+- Do not hardcode localhost. Use the sentinel-api integration base URL already configured.
+
+After scaffolding, wire real calls end-to-end and tell me exactly what to click to verify Live, Events, and Chat.

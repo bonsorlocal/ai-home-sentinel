@@ -64,6 +64,12 @@ def _project_root() -> str:
 
 # The system prompt keeps Grok grounded: answer only from the notes we give it,
 # stay short, and admit when it does not know.
+_CONVERSATION_RULE = (
+    "When prior conversation turns are included, treat them as context. "
+    "Resolve pronouns and short follow-ups (like 'why is that?', 'him', 'that') "
+    "using the previous turns. Reply in a natural conversational style."
+)
+
 _LEDGER_SYSTEM_PROMPT = (
     "You are the assistant for a home security camera called AI Home Sentinel. "
     "You answer the owner's questions using ONLY the recent context provided. "
@@ -72,7 +78,8 @@ _LEDGER_SYSTEM_PROMPT = (
     "for that event. Be brief, friendly, and concrete. Refer to times in a natural "
     "way. When making factual security claims, cite the checked evidence window "
     "or event timestamps from context. If context does not contain the answer, "
-    "say so plainly instead of guessing."
+    "say so plainly instead of guessing. "
+    + _CONVERSATION_RULE
 )
 
 _LIVE_SYSTEM_PROMPT = (
@@ -81,7 +88,10 @@ _LIVE_SYSTEM_PROMPT = (
     "can see in the image. If the owner introduces themselves (for example "
     "'I'm Jordan, remember me'), acknowledge what you see and use their name in "
     "your reply. Be brief, friendly, and concrete. If the image is unclear or "
-    "empty, say so plainly instead of guessing."
+    "empty, say so plainly instead of guessing. "
+    "If the owner asks about past events or how far back you can look, say you "
+    "also have an event log and DVR (do not claim you are live-only). "
+    + _CONVERSATION_RULE
 )
 
 _COMBINED_SYSTEM_PROMPT = (
@@ -91,7 +101,8 @@ _COMBINED_SYSTEM_PROMPT = (
     "present-tense or visual questions; use the event notes for times, history, "
     "and 'when did X happen' questions. Be brief, friendly, and concrete. "
     "When making factual security claims, cite checked windows or timestamps "
-    "from the provided context instead of guessing."
+    "from the provided context instead of guessing. "
+    + _CONVERSATION_RULE
 )
 
 _CASUAL_SYSTEM_PROMPT = (
@@ -100,7 +111,8 @@ _CASUAL_SYSTEM_PROMPT = (
     "Be friendly, concise, and useful for everyday asks like recipes, planning, "
     "explanations, and troubleshooting. Use the user's provided details and common "
     "knowledge. Do not claim specific sightings, times, or incidents unless explicit "
-    "camera/event evidence context is attached."
+    "camera/event evidence context is attached. "
+    + _CONVERSATION_RULE
 )
 
 _HYBRID_SYSTEM_PROMPT = (
@@ -110,7 +122,8 @@ _HYBRID_SYSTEM_PROMPT = (
     "(1) Evidence — only factual camera/event claims grounded in the provided "
     "ledger/DVR/live context, citing the checked time window when available; "
     "(2) General — everyday advice that does not invent camera events. "
-    "If evidence is missing, say so plainly before offering general help."
+    "If evidence is missing, say so plainly before offering general help. "
+    + _CONVERSATION_RULE
 )
 
 # Backwards-compatible alias used in tests/docs.
@@ -274,6 +287,124 @@ _META_HINTS = (
     "language model",
 )
 
+_CAPABILITY_HINTS = (
+    "how far back",
+    "how far can you",
+    "past events",
+    "past event",
+    "event history",
+    "look back",
+    "go back in",
+    "historical events",
+    "access to past",
+    "access to events",
+    "what can you remember",
+    "do you remember past",
+    "no past events",
+    "can you see past",
+    "how much history",
+    "how long can you remember",
+    "retention",
+)
+
+_FOLLOWUP_PHRASES = (
+    "why is that",
+    "how come",
+    "what do you mean",
+    "explain that",
+    "explain this",
+    "about that",
+    "about this",
+    "what about that",
+    "what about this",
+    "and that",
+    "same for",
+    "why though",
+    "why not",
+)
+
+
+def normalize_chat_history(
+    history: Any, *, max_turns: int = 10
+) -> List[Dict[str, str]]:
+    """Return sanitized ``[{role, content}, ...]`` turns (text only)."""
+    if not isinstance(history, list):
+        return []
+    max_turns = max(1, min(int(max_turns), 30))
+    cleaned: List[Dict[str, str]] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        if role in ("bot", "sentinel", "ai", "model"):
+            role = "assistant"
+        if role in ("you", "human", "owner"):
+            role = "user"
+        if role not in ("user", "assistant"):
+            continue
+        content = str(item.get("content") or item.get("text") or "").strip()
+        if not content:
+            continue
+        # Cap each turn so prompts stay affordable.
+        if len(content) > 1200:
+            content = content[:1200] + "…"
+        cleaned.append({"role": role, "content": content})
+    if len(cleaned) > max_turns:
+        cleaned = cleaned[-max_turns:]
+    return cleaned
+
+
+def is_followup_question(question: str) -> bool:
+    """True for short pronoun / continuation questions that need prior turns."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    if any(h in q for h in _FOLLOWUP_PHRASES):
+        return True
+    bare = q.rstrip("?!.").strip()
+    words = bare.split()
+    if not words:
+        return False
+    if len(words) <= 5 and words[0] in (
+        "why",
+        "how",
+        "and",
+        "what",
+        "who",
+        "when",
+        "where",
+        "which",
+        "him",
+        "her",
+        "them",
+        "that",
+        "this",
+        "those",
+        "these",
+    ):
+        return True
+    return False
+
+
+def is_capability_question(question: str) -> bool:
+    """True when asking what evidence window / history Sentinel can use."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    if any(h in q for h in _CAPABILITY_HINTS):
+        return True
+    if "how far" in q and "event" in q:
+        return True
+    if "past" in q and "event" in q:
+        return True
+    if "answer questions about" in q and any(
+        x in q for x in ("event", "past", "history", "footage", "dvr")
+    ):
+        return True
+    if "live" in q and ("only" in q or "just" in q) and ("frame" in q or "camera" in q):
+        return True
+    return False
+
 
 def is_meta_question(question: str) -> bool:
     """True when the user is asking about the brain/provider, not the camera scene."""
@@ -318,7 +449,7 @@ def classify_query_mode(question: str) -> str:
     q = (question or "").strip().lower()
     if not q:
         return "casual"
-    if is_meta_question(question):
+    if is_meta_question(question) or is_capability_question(question):
         return "casual"
     footage = any(h in q for h in _LEDGER_HINTS) or any(h in q for h in _LIVE_HINTS)
     casual = any(h in q for h in _CASUAL_HINTS) or any(h in q for h in _GENERAL_HINTS)
@@ -678,9 +809,17 @@ class Brain:
         self._memory_max_entries = int(brain_cfg.get("memory_max_entries", 300))
         self._memory_max_context = int(brain_cfg.get("memory_max_context_items", 8))
         self._memory_retention_days = int(brain_cfg.get("memory_retention_days", 90))
+        self._max_chat_history_turns = int(brain_cfg.get("max_chat_history_turns", 10))
         self._google_base_url = str(
             brain_cfg.get("google_base_url", "https://generativelanguage.googleapis.com/v1beta")
         ).rstrip("/")
+        dvr_cfg: Dict[str, Any] = {}
+        try:
+            dvr_cfg = config.get("dvr") or {}
+        except Exception:  # noqa: BLE001
+            dvr_cfg = {}
+        self._dvr_enabled = bool(dvr_cfg.get("enabled", True))
+        self._dvr_retention_hours = float(dvr_cfg.get("retention_hours", 48) or 48)
 
         secrets_file = str(brain_cfg.get("secrets_file", "secrets.yaml"))
         if secrets_path is None:
@@ -766,7 +905,7 @@ class Brain:
             )
         return "The brain provider is not configured."
 
-    def ask(self, question: str) -> Dict[str, Any]:
+    def ask(self, question: str, history: Any = None) -> Dict[str, Any]:
         """Answer a question using live video, event notes, or both. Never raises."""
         question = (question or "").strip()
         if not question:
@@ -777,6 +916,18 @@ class Brain:
                 mode="casual",
                 source="conversation",
                 path="validation_error",
+            )
+
+        history_turns = normalize_chat_history(
+            history, max_turns=self._max_chat_history_turns
+        )
+        routing_question = question
+        if is_followup_question(question) and history_turns:
+            prior_bits = []
+            for turn in history_turns[-4:]:
+                prior_bits.append(f"{turn['role']}: {turn['content']}")
+            routing_question = (
+                "\n".join(prior_bits) + f"\nuser follow-up: {question}"
             )
 
         recent_recap = self._build_recent_recap_answer(question)
@@ -790,7 +941,7 @@ class Brain:
                 path="local_recent_recap",
             )
 
-        if is_meta_question(question):
+        if is_meta_question(question) or is_meta_question(routing_question):
             return self._reply(
                 True,
                 self._meta_provider_answer(),
@@ -798,6 +949,16 @@ class Brain:
                 mode="casual",
                 source="conversation",
                 path="meta_provider",
+            )
+
+        if is_capability_question(question) or is_capability_question(routing_question):
+            return self._reply(
+                True,
+                self._capability_answer(),
+                offline=False,
+                mode="casual",
+                source="conversation",
+                path="local_capability",
             )
 
         enrollment = _parse_owner_enrollment(question)
@@ -832,10 +993,10 @@ class Brain:
                 path="owner_enrollment_failed",
             )
 
-        mode = classify_query_mode(question)
-        route_source = classify_query_source(question)
+        mode = classify_query_mode(routing_question)
+        route_source = classify_query_source(routing_question)
         source = "conversation" if mode == "casual" else route_source
-        plan = _build_query_plan(question, mode, route_source)
+        plan = _build_query_plan(routing_question, mode, route_source)
         use_live = bool(plan.get("needs_live_frame")) and self._live_vision_enabled
         use_ledger = bool(plan.get("needs_ledger"))
 
@@ -903,6 +1064,7 @@ class Brain:
             live_jpeg=live_jpeg,
             dvr_context=dvr_context,
             dvr_analysis_context=dvr_analysis_context,
+            history=history_turns,
         )
         provider = self._effective_provider()
         if live_jpeg is not None:
@@ -1177,6 +1339,45 @@ class Brain:
             )
         return self._reply(True, answer, offline=False, path="cloud_primary")
 
+    def _capability_answer(self) -> str:
+        """Plain-language description of live + ledger + DVR reach."""
+        try:
+            total = int(self._ledger.count())
+        except Exception:  # noqa: BLE001
+            total = 0
+        oldest_note = ""
+        newest_note = ""
+        try:
+            recent = self._ledger.list_recent(limit=max(1, min(self._max_events, 200)))
+            if recent:
+                newest = recent[0]
+                oldest = recent[-1]
+                newest_note = f" Newest logged event: {newest.timestamp}."
+                if len(recent) > 1:
+                    oldest_note = (
+                        f" Oldest event in the recent window I load "
+                        f"({len(recent)} events): {oldest.timestamp}."
+                    )
+                elif total > 0:
+                    oldest_note = f" I currently load up to {self._max_events} recent events into answers."
+        except Exception:  # noqa: BLE001
+            pass
+
+        dvr_note = (
+            f" Continuous DVR is enabled with about {int(self._dvr_retention_hours)} hours "
+            f"of retention when storage is available."
+            if self._dvr_enabled
+            else " Continuous DVR is currently disabled in config."
+        )
+        return (
+            "I can use three sources: the live camera for what is happening right now, "
+            f"the event log for past detections ({total} events stored right now), "
+            f"and DVR recordings for timeline questions.{newest_note}{oldest_note}"
+            f"{dvr_note} Ask with a time window (for example, \"what happened in the "
+            "last hour?\") and I will pull matching evidence — I am not limited to "
+            "the live frame alone."
+        )
+
     def _build_ask_messages(
         self,
         *,
@@ -1187,6 +1388,7 @@ class Brain:
         live_jpeg: Optional[bytes],
         dvr_context: str = "",
         dvr_analysis_context: str = "",
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         dvr_block = ""
         if dvr_context:
@@ -1249,10 +1451,14 @@ class Brain:
         else:
             user_content = text
 
-        return [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ]
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
+        for turn in history or []:
+            role = turn.get("role")
+            content = turn.get("content")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_content})
+        return messages
 
     def _capture_live_jpeg(self) -> Optional[bytes]:
         """Grab and encode the latest camera frame for vision queries."""
@@ -1476,24 +1682,19 @@ class Brain:
 
     def _build_google_payload(self, messages: List[Dict[str, Any]], *, max_tokens: int) -> Dict[str, Any]:
         system_text = ""
-        user_parts: List[Dict[str, Any]] = []
-        for item in messages:
-            role = str(item.get("role", "")).strip().lower()
-            content = item.get("content")
-            if role == "system":
-                system_text = str(content or "")
-                continue
-            if role != "user":
-                continue
+        contents: List[Dict[str, Any]] = []
+
+        def _parts_from_content(content: Any) -> List[Dict[str, Any]]:
+            parts: List[Dict[str, Any]] = []
             if isinstance(content, list):
                 for part in content:
                     if part.get("type") == "text":
-                        user_parts.append({"text": str(part.get("text", ""))})
+                        parts.append({"text": str(part.get("text", ""))})
                     elif part.get("type") == "image_url":
                         url = str((part.get("image_url") or {}).get("url", ""))
                         if url.startswith("data:image/jpeg;base64,"):
                             b64 = url.split(",", 1)[1]
-                            user_parts.append(
+                            parts.append(
                                 {
                                     "inlineData": {
                                         "mimeType": "image/jpeg",
@@ -1502,11 +1703,24 @@ class Brain:
                                 }
                             )
             else:
-                user_parts.append({"text": str(content or "")})
-        if not user_parts:
-            user_parts = [{"text": ""}]
+                parts.append({"text": str(content or "")})
+            return parts or [{"text": ""}]
+
+        for item in messages:
+            role = str(item.get("role", "")).strip().lower()
+            content = item.get("content")
+            if role == "system":
+                system_text = str(content or "")
+                continue
+            if role == "assistant":
+                contents.append({"role": "model", "parts": _parts_from_content(content)})
+                continue
+            if role == "user":
+                contents.append({"role": "user", "parts": _parts_from_content(content)})
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": ""}]}]
         payload: Dict[str, Any] = {
-            "contents": [{"role": "user", "parts": user_parts}],
+            "contents": contents,
             "generationConfig": {"temperature": 0.3, "maxOutputTokens": int(max_tokens)},
         }
         if system_text:

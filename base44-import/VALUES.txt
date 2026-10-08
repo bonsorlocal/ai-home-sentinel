@@ -1,0 +1,10 @@
+# Fill these in for yourself (do not commit real secrets)
+
+TUNNEL_URL=
+# Example: https://abc-xyz.trycloudflare.com
+
+DASHBOARD_TOKEN=
+# Only if config dashboard.require_token is true
+# Copied from secrets.yaml → dashboard_token
+
+INTEGRATION_SLUG=sentinel-api

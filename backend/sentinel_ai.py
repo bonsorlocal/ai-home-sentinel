@@ -256,11 +256,52 @@ async def ask_gemini_vision(question: str, context_str: str, jpeg_bytes: bytes) 
 
 
 async def ask_sentinel(session_id, question, context_str, jpeg_bytes=None):
+    # #region agent log
+    import json as _json
+    import time as _time
+    import os as _os
+    _log_path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "debug-8992b8.log",
+    )
+
+    def _alog(msg, data=None):
+        try:
+            with open(_log_path, "a", encoding="utf-8") as fh:
+                fh.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "8992b8",
+                            "hypothesisId": "D",
+                            "location": "sentinel_ai.ask_sentinel",
+                            "message": msg,
+                            "data": data or {},
+                            "timestamp": int(_time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    _alog(
+        "ask_enter",
+        {
+            "model": _gemini_model(),
+            "has_key": bool(_llm_key()),
+            "has_jpeg": bool(jpeg_bytes),
+            "q_len": len(question or ""),
+        },
+    )
+    # #endregion
     if is_meta_question(question):
         return meta_provider_answer()
 
     key = _llm_key()
     if not key:
+        # #region agent log
+        _alog("missing_key")
+        # #endregion
         return "AI is not configured: missing EMERGENT_LLM_KEY."
 
     if jpeg_bytes:
@@ -268,19 +309,34 @@ async def ask_sentinel(session_id, question, context_str, jpeg_bytes=None):
             return await ask_gemini_vision(question, context_str, jpeg_bytes)
         except Exception as e:  # noqa: BLE001
             logger.warning("vision call failed, falling back to text: %s", e)
+            # #region agent log
+            _alog("vision_fail", {"error": str(e)[:240]})
+            # #endregion
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
     except ImportError:
+        # #region agent log
+        _alog("import_fail")
+        # #endregion
         return (
             "Sentinel AI library (emergentintegrations) is not installed on this device. "
             "The camera and events still work; install it to enable chat."
         )
-    chat = LlmChat(
-        api_key=key,
-        session_id=session_id,
-        system_message=SYSTEM_PROMPT,
-    ).with_model("gemini", _gemini_model())
-    prompt = f"CONTEXT:\n{context_str}\n\nUSER QUESTION: {question}"
-    resp = await chat.send_message(UserMessage(text=prompt))
-    return resp
+    try:
+        chat = LlmChat(
+            api_key=key,
+            session_id=session_id,
+            system_message=SYSTEM_PROMPT,
+        ).with_model("gemini", _gemini_model())
+        prompt = f"CONTEXT:\n{context_str}\n\nUSER QUESTION: {question}"
+        resp = await chat.send_message(UserMessage(text=prompt))
+        # #region agent log
+        _alog("chat_ok", {"answer_len": len(str(resp or ""))})
+        # #endregion
+        return resp
+    except Exception as e:  # noqa: BLE001
+        # #region agent log
+        _alog("chat_fail", {"error": str(e)[:300], "model": _gemini_model()})
+        # #endregion
+        raise
