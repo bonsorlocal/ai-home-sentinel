@@ -126,7 +126,25 @@ Look for:
 
 1. Subscribe to your ntfy topic on your phone.
 2. Set `notifications.enabled: true` and `topic` in `config.yaml`.
-3. Restart: `sudo systemctl restart sentinel`
+3. For Answer / Ignore / Connect buttons, set `notifications.public_base_url` to a
+   reachable URL for the Pi (LAN IP or tunnel), e.g. `http://192.168.1.50:5000`.
+4. Restart: `sudo systemctl restart sentinel`
+
+## Adaptive AI + camera voice (Phase 9B–9E)
+
+- `detector.backend: auto` offloads YOLO when RAM exceeds `performance.memory_offload_percent`.
+- `live_vision.enabled: true` analyzes door scenes during motion sessions (cloud).
+- `voice_out.enabled: true` only after a USB speaker is attached; needs Google TTS credentials.
+- Optional Twilio: set `telephony.enabled: true` and Twilio keys in `secrets.yaml`.
+
+## DVR pin / export
+
+```bash
+# Export + pin segments in a time window
+curl -s "http://localhost:5000/api/dvr/export?start=2026-07-01T12:00:00&end=2026-07-01T13:00:00" | python3 -m json.tool
+# Pin one segment
+curl -s -X POST "http://localhost:5000/api/dvr/pin/1" | python3 -m json.tool
+```
 
 ## Troubleshooting
 

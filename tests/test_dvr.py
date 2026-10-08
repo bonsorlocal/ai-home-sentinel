@@ -158,6 +158,8 @@ def test_dvr_range_includes_active_segment(tmp_path):
     now = datetime.utcnow().replace(microsecond=0)
     recorder._active_segment_start = now - timedelta(minutes=15)
     recorder._active_segment_deadline = now + timedelta(minutes=45)
+    recorder._frames_received = 3
+    recorder._last_frame_at = now
 
     segments = recorder.list_range(
         (now - timedelta(hours=1)).isoformat(),
@@ -319,3 +321,36 @@ def test_dvr_index_delete_segment(tmp_path):
     assert deleted_path == str(seg_path)
     assert index.get(seg_id) is None
     assert index.list_all() == []
+
+
+def test_dvr_pin_and_export_range(tmp_path):
+    storage_root = tmp_path / "usb"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    recorder = ContinuousRecorder(
+        _cfg(str(storage_root), retention_hours=48),
+        frame_getter=lambda: np.zeros((180, 320, 3), dtype=np.uint8),
+    )
+    assert recorder.index is not None
+    start = datetime.utcnow()
+    seg_path = storage_root / "segments" / "seg.mp4"
+    seg_path.parent.mkdir(parents=True, exist_ok=True)
+    seg_path.write_bytes(b"video-bytes")
+    seg_id = recorder.index.add_segment(
+        start_ts=start.isoformat(),
+        end_ts=(start + timedelta(minutes=5)).isoformat(),
+        path=str(seg_path),
+        size_bytes=11,
+        motion_score=0.2,
+    )
+    pinned = recorder.pin_segment(seg_id)
+    assert pinned["ok"] is True
+    assert os.path.exists(pinned["path"])
+
+    exported = recorder.export_range(
+        (start - timedelta(minutes=1)).isoformat(),
+        (start + timedelta(minutes=10)).isoformat(),
+        pin=True,
+    )
+    assert exported["ok"] is True
+    assert exported["count"] == 1
+    assert exported["segments"][0]["id"] == seg_id

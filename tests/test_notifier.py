@@ -89,6 +89,31 @@ def test_sends_ntfy_on_tier2(tmp_path):
     assert "Unknown face" in captured["body"]
 
 
+def test_ntfy_includes_action_buttons(tmp_path):
+    captured = {}
+
+    def fake_post(url, headers, body, timeout):
+        captured["headers"] = headers
+        return 200
+
+    notifier = Notifier(
+        _make_config(actions_enabled=True, public_base_url="http://pi.test:5000"),
+        http_post=fake_post,
+    )
+    notifier.set_action_urls_fn(
+        lambda event_id: {
+            "answer-door": f"http://pi.test:5000/api/actions/answer-door?event_id={event_id}&token=t",
+            "ignore": f"http://pi.test:5000/api/actions/ignore?event_id={event_id}&token=t",
+            "connect": f"http://pi.test:5000/api/actions/connect?event_id={event_id}&token=t",
+        }
+    )
+    ledger = EventLedger(str(tmp_path / "test.db"))
+    assert notifier.notify(_tier2_event(ledger)) is True
+    actions = captured["headers"].get("Actions", "")
+    assert "Answer door" in actions
+    assert "Connect me" in actions
+
+
 def test_cooldown_blocks_second_send(tmp_path):
     calls = []
 

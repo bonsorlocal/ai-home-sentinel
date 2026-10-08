@@ -1,0 +1,19 @@
+# Copy to config.local.yaml (gitignored) to run Sentinel on a Windows/macOS PC.
+# This overlay is merged on top of config.yaml — it does not replace the Pi file.
+
+camera:
+  type: "opencv"            # laptop / USB webcam
+  index: 0                  # try 1 if this is the wrong camera
+  startup_wait_seconds: 0
+
+face_recognition:
+  enabled: false            # dlib/face_recognition is painful to build on Windows
+
+dvr:
+  storage_root: "data/dvr"  # local folder instead of the Pi USB path
+
+brain:
+  provider: "google"        # pin Gemini on PC (requires google_api_key in secrets.yaml)
+
+video_metadata:
+  provider: "google"

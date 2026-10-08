@@ -12,6 +12,13 @@ venv/
 .venv/
 env/
 
+# Local PC overlay (webcam / Windows paths) — never deploy this to the Pi
+config.local.yaml
+
+# Emergent local env (written by scripts/run_pc_emergent.ps1)
+backend/.env
+frontend/build/
+
 # Secrets - NEVER commit
 secrets.yaml
 secrets.yml

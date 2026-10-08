@@ -24,8 +24,26 @@ pip install -r requirements.txt
 ```
 
 1. Copy `secrets.yaml.example` → `secrets.yaml` and add your `google_api_key` (preferred) and/or `grok_api_key` (fallback).
-2. Edit `config.yaml` as needed.
+2. Copy `config.local.yaml.example` → `config.local.yaml` (gitignored). This uses the laptop webcam and a local DVR folder without changing the Pi `config.yaml`.
 3. Run: `python run.py` → open http://localhost:5000
+
+Windows shortcut (creates the overlay if missing, then starts the dashboard):
+
+```powershell
+.\scripts\run_pc.ps1
+```
+
+If the wrong camera opens, set `camera.index` to `1` in `config.local.yaml`. Allow Cursor/Python camera access in Windows Settings → Privacy → Camera. Face enrollment stays Pi-only (`face_recognition` is off in the PC overlay).
+
+### Full product UI on PC (Emergent)
+
+With Sentinel already on `:5000`, and `google_api_key` + `mongo_atlas_url` in `secrets.yaml`:
+
+```powershell
+.\scripts\run_pc_emergent.ps1
+```
+
+Then open http://localhost:8080 (Live Events / DVR / Sentinel AI). The launcher writes `backend/.env` (gitignored) pointing at `http://127.0.0.1:5000`.
 
 Run tests: `python -m pytest tests/`
 

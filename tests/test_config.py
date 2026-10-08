@@ -35,11 +35,16 @@ def test_load_real_config_has_expected_sections():
         "dashboard",
         "video_metadata",
         "voice",
+        "voice_out",
+        "live_vision",
+        "telephony",
         "google",
         "performance",
         "pi_bridge",
     ):
         assert config.get(section) is not None, f"missing section: {section}"
+    assert config.get("performance", "adaptive_ai_enabled") is True
+    assert config.get("detector", "backend") in ("auto", "ultralytics", "cloud", "off")
 
 
 def test_dashboard_defaults_present():
@@ -61,7 +66,7 @@ def test_partial_config_is_merged_over_defaults(tmp_path):
     partial = tmp_path / "config.yaml"
     partial.write_text("dashboard:\n  port: 1234\n", encoding="utf-8")
 
-    config = load_config(path=str(partial))
+    config = load_config(path=str(partial), local_path="")
 
     # The overridden value is used...
     assert config.get("dashboard", "port") == 1234
@@ -78,13 +83,42 @@ def test_voice_defaults_present():
     assert config.get("voice", "wake_word_enabled") is False
     assert config.get("voice", "language") == "en-US"
     assert config.get("voice", "tts_provider") == "auto"
-    vi_cfg = config.get("google", "video_intelligence") or {}
-    assert vi_cfg.get("fallback_only") is True
+
+
+def test_brain_jarvis_defaults_present():
+    """Jarvis conversational intelligence settings should have safe defaults."""
+    brain = DEFAULT_CONFIG["brain"]
+    assert brain["chat_model"]
+    assert brain["fallback_model"]
+    assert brain["request_retries"] >= 0
+    assert brain["strict_evidence_guardrails"] is True
+    assert brain["local_casual_fallback"] is True
+    assert brain["memory_enabled"] is True
+    assert brain["memory_max_entries"] >= 10
+    assert brain["memory_retention_days"] >= 1
 
 
 def test_missing_file_uses_defaults(tmp_path):
     """If the file does not exist, defaults are used and nothing crashes."""
     missing = tmp_path / "nope.yaml"
-    config = load_config(path=str(missing))
+    config = load_config(path=str(missing), local_path="")
     assert isinstance(config, Config)
     assert config.get("dashboard", "port") == DEFAULT_CONFIG["dashboard"]["port"]
+
+
+def test_local_overlay_overrides_camera_without_replacing_pi_file(tmp_path):
+    """config.local.yaml can switch to a PC webcam without editing config.yaml."""
+    base = tmp_path / "config.yaml"
+    overlay = tmp_path / "config.local.yaml"
+    base.write_text("camera:\n  type: picamera2\n", encoding="utf-8")
+    overlay.write_text(
+        "camera:\n  type: opencv\n  index: 0\n"
+        "dvr:\n  storage_root: data/dvr\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(path=str(base), local_path=str(overlay))
+
+    assert config.get("camera", "type") == "opencv"
+    assert config.get("camera", "index") == 0
+    assert config.get("dvr", "storage_root") == "data/dvr"

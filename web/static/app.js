@@ -733,6 +733,44 @@
     feedbackSubmit.addEventListener("click", postFeedback);
   }
 
+  var memoryClear = byId("memory-clear");
+  if (memoryClear) {
+    memoryClear.addEventListener("click", function () {
+      if (
+        !window.confirm(
+          "Clear all remembered chat preferences and feedback on this device?"
+        )
+      ) {
+        return;
+      }
+      setFeedbackState("Clearing remembered preferences...", false);
+      fetch("/api/chat/memory/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+        .then(function (response) {
+          return response.json();
+        })
+        .then(function (data) {
+          if (data && data.ok) {
+            setFeedbackState(
+              "Cleared " + (data.deleted || 0) + " remembered item(s).",
+              false
+            );
+          } else {
+            setFeedbackState(
+              (data && data.message) || "Could not clear memory right now.",
+              true
+            );
+          }
+        })
+        .catch(function () {
+          setFeedbackState("Could not clear memory right now.", true);
+        });
+    });
+  }
+
   Voice.initUi();
   updateVoiceHint();
 

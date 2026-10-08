@@ -82,10 +82,10 @@
           </p>
           <div class="feedback-row">
             <button type="button" class="btn btn-secondary" id="feedback-up">
-              👍 Helpful
+              Helpful
             </button>
             <button type="button" class="btn btn-secondary" id="feedback-down">
-              👎 Needs fix
+              Needs fix
             </button>
           </div>
           <textarea
@@ -94,13 +94,18 @@
             rows="2"
             placeholder="Optional correction (e.g., 'That was my brother, not a stranger')."
           ></textarea>
-          <label class="muted" for="feedback-remember">
+          <label class="muted feedback-remember-label" for="feedback-remember">
             <input type="checkbox" id="feedback-remember" />
             Remember this as a preference
           </label>
-          <button type="button" id="feedback-submit" class="btn btn-secondary">
-            Send feedback
-          </button>
+          <div class="feedback-actions">
+            <button type="button" id="feedback-submit" class="btn btn-secondary">
+              Send feedback
+            </button>
+            <button type="button" id="memory-clear" class="btn btn-secondary">
+              Clear remembered prefs
+            </button>
+          </div>
         </div>
       </section>
 

@@ -487,6 +487,62 @@ def create_app(
             return jsonify(result), 400
         return jsonify(result)
 
+    @app.route("/api/dvr/export")
+    def api_dvr_export():  # type: ignore[unused-ignore]
+        if runtime is None:
+            return jsonify({"ok": False, "message": "Runtime unavailable."}), 503
+        start_raw = str(request.args.get("start", "")).strip()
+        end_raw = str(request.args.get("end", "")).strip()
+        if not start_raw or not end_raw:
+            return jsonify({"ok": False, "message": "start and end are required."}), 400
+        pin = str(request.args.get("pin", "1")).strip().lower() not in ("0", "false", "no")
+        try:
+            limit = max(1, min(24, int(request.args.get("limit", 12))))
+        except (TypeError, ValueError):
+            limit = 12
+        result = runtime.dvr.export_range(start_raw, end_raw, pin=pin, max_segments=limit)
+        status_code = 200 if result.get("ok") else 404
+        return jsonify(result), status_code
+
+    @app.route("/api/dvr/pin/<int:segment_id>", methods=["POST"])
+    def api_dvr_pin(segment_id: int):  # type: ignore[unused-ignore]
+        if runtime is None:
+            return jsonify({"ok": False, "message": "Runtime unavailable."}), 503
+        result = runtime.dvr.pin_segment(segment_id)
+        return jsonify(result), (200 if result.get("ok") else 404)
+
+    @app.route("/api/actions/<action>", methods=["GET", "POST"])
+    def api_actions(action: str):  # type: ignore[unused-ignore]
+        if runtime is None:
+            return jsonify({"ok": False, "message": "Runtime unavailable."}), 503
+        payload = request.get_json(silent=True) or {}
+        try:
+            event_id = int(
+                request.args.get("event_id")
+                or payload.get("event_id")
+                or 0
+            )
+        except (TypeError, ValueError):
+            event_id = 0
+        token = str(
+            request.args.get("token") or payload.get("token") or ""
+        ).strip()
+        if event_id <= 0 or not token:
+            return jsonify({"ok": False, "message": "event_id and token are required."}), 400
+        result = runtime.actions.handle(action, event_id, token)
+        code = 200 if result.get("ok") else 403
+        return jsonify(result), code
+
+    @app.route("/api/voice/speak", methods=["POST"])
+    def api_voice_speak():  # type: ignore[unused-ignore]
+        if runtime is None:
+            return jsonify({"ok": False, "message": "Runtime unavailable."}), 503
+        payload = request.get_json(silent=True) or {}
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            return jsonify({"ok": False, "message": "text is required."}), 400
+        return jsonify(runtime.voice_out.speak(text))
+
     @app.route("/api/chat", methods=["POST"])
     def api_chat():  # type: ignore[unused-ignore]
         if runtime is None:
@@ -555,6 +611,19 @@ def create_app(
                 }
             )
         return jsonify(runtime.brain.memory_status())
+
+    @app.route("/api/chat/memory/clear", methods=["POST"])
+    def api_chat_memory_clear():  # type: ignore[unused-ignore]
+        if runtime is None:
+            return jsonify(
+                {
+                    "ok": False,
+                    "message": "The brain is not available on this dashboard.",
+                }
+            )
+        payload = request.get_json(silent=True) or {}
+        preference_key = str(payload.get("preference_key", "")).strip()
+        return jsonify(runtime.brain.clear_memory(preference_key=preference_key))
 
     @app.route("/api/profile/owner")
     def api_owner_profile_status():  # type: ignore[unused-ignore]

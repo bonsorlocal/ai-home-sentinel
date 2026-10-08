@@ -25,7 +25,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from sentinel.brain import Brain, classify_query_mode, classify_query_source  # noqa: E402
+from sentinel.brain import (  # noqa: E402
+    Brain,
+    classify_query_mode,
+    classify_query_source,
+    is_meta_question,
+)
 from sentinel.config import Config  # noqa: E402
 from sentinel.events import EventLedger  # noqa: E402
 
@@ -311,6 +316,38 @@ def test_classify_query_mode_routes_general_by_default():
     assert classify_query_mode("can you help me plan dinner this week?") == "casual"
     assert classify_query_mode("hello there") == "casual"
     assert classify_query_mode("hi, what time was that clip from?") == "hybrid"
+
+
+def test_meta_questions_do_not_use_live_camera():
+    assert is_meta_question("are you running through gemini?") is True
+    assert is_meta_question("are you running through the google api keys?") is True
+    assert is_meta_question("which model are you using?") is True
+    assert is_meta_question("What do you see right now?") is False
+    assert classify_query_mode("are you running through gemini?") == "casual"
+    assert classify_query_source("are you running through gemini?") == "ledger"
+
+
+def test_ask_meta_provider_answers_without_live_frame(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text('google_api_key: "google-test-key"\n', encoding="utf-8")
+    calls = {"n": 0}
+
+    def fake_post(url, headers, payload, timeout):
+        calls["n"] += 1
+        return _ok_response("should not be called for meta")
+
+    brain = Brain(
+        _make_config(provider="google", live_vision_enabled=True),
+        _ledger(tmp_path),
+        secrets_path=str(secrets),
+        http_post=fake_post,
+        frame_getter=lambda: (_ for _ in ()).throw(AssertionError("no live frame")),
+    )
+    result = brain.ask("are you running through gemini?")
+    assert result["ok"] is True
+    assert result["path"] == "meta_provider"
+    assert "Gemini" in result["answer"]
+    assert calls["n"] == 0
 
 
 def test_ask_live_attaches_image(tmp_path):
@@ -697,10 +734,14 @@ def test_casual_query_uses_conversation_mode(tmp_path):
     assert result["ok"] is True
     assert result["mode"] == "casual"
     assert result["source"] == "conversation"
+    assert result["answer_path"] == "casual"
     assert result["path"] in ("cloud_primary", "cloud_fallback_model")
+    assert result.get("response_id")
     user_message = captured["payload"]["messages"][-1]["content"]
     assert isinstance(user_message, str)
     assert "Recent event notes" not in user_message
+    system_message = captured["payload"]["messages"][0]["content"]
+    assert "general assistant request" in system_message.lower()
 
 
 def test_recipe_query_uses_general_assistant_lane(tmp_path):
@@ -766,10 +807,14 @@ def test_hybrid_query_keeps_evidence_context(tmp_path):
     result = brain.ask("Hi, what time was that kitchen motion and what should I cook with eggs?")
     assert result["ok"] is True
     assert result["mode"] == "hybrid"
+    assert result["answer_path"] == "evidence"
     assert result["path"] in ("cloud_primary", "cloud_fallback_model")
     user_message = captured["payload"]["messages"][-1]["content"]
     assert isinstance(user_message, str)
     assert "Recent event notes" in user_message
+    system_message = captured["payload"]["messages"][0]["content"]
+    assert "Evidence" in system_message
+    assert "General" in system_message
 
 
 def test_owner_enrollment_from_natural_language(tmp_path):

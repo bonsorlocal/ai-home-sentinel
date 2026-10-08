@@ -283,6 +283,37 @@ footer {
   box-shadow: none;
 }
 
+.feedback-panel {
+  margin-top: 0.9rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.feedback-row,
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.feedback-panel .btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(76, 194, 255, 0.35);
+}
+
+.feedback-remember-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.feedback-error {
+  color: var(--bad);
+}
+
 .btn-voice {
   background: #2a3540;
   color: var(--text);

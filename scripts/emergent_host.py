@@ -21,7 +21,10 @@ def _build_app():
     app_dir = os.path.abspath(os.environ.get("EMERGENT_APP_DIR", "/home/sentinel/emergent-app"))
     backend_dir = os.path.join(app_dir, "backend")
     frontend_build = os.path.join(app_dir, "frontend", "build")
+    stubs_dir = os.path.join(app_dir, "scripts", "emergent_stubs")
 
+    if stubs_dir not in sys.path and os.path.isdir(stubs_dir):
+        sys.path.insert(0, stubs_dir)
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 

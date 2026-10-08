@@ -18,6 +18,8 @@ Tier promotion rules (first matching rule wins, highest priority first):
   P1  Unknown face detected                              -> tier 2, imp 0.75
   P2  >=N person detections within W minutes             -> tier 2, imp 0.80
   P3  Person detected during night hours (22:00-05:59)   -> tier 2, imp 0.70
+  P4  Cloud scene: visitor_at_door + knocking/waiting    -> tier 2, imp 0.85
+  P5  Cloud scene: delivering (daytime package/mail)     -> tier 2, imp 0.75
 
 Default fallback (no rule fires):
   object - person                                        -> tier 1, imp 0.40
@@ -60,6 +62,7 @@ class Reasoner:
         self._repeat_window_minutes: int = int(cfg.get("repeat_person_window_minutes", 5))
         self._repeat_threshold: int = int(cfg.get("repeat_person_threshold", 3))
         self._motion_precedes_seconds: int = int(cfg.get("motion_precedes_seconds", 90))
+        self._visitor_min_confidence: float = float(cfg.get("visitor_min_confidence", 0.55))
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -109,6 +112,7 @@ class Reasoner:
             "repeat_person_window_minutes": self._repeat_window_minutes,
             "repeat_person_threshold": self._repeat_threshold,
             "motion_precedes_seconds": self._motion_precedes_seconds,
+            "visitor_min_confidence": self._visitor_min_confidence,
         }
 
     # ------------------------------------------------------------------
@@ -122,6 +126,21 @@ class Reasoner:
         recent: List[EventRecord],
         ts: datetime,
     ) -> Tuple[int, float]:
+        # ---- cloud live scene (P4 / P5) ---------------------------------
+        cloud = entities.get("cloud_scene") or {}
+        if isinstance(cloud, dict) and cloud:
+            try:
+                confidence = float(cloud.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            activity = str(cloud.get("activity", "none")).strip().lower()
+            visitor = bool(cloud.get("visitor_at_door", False))
+            if confidence >= self._visitor_min_confidence:
+                if visitor and activity in ("knocking", "waiting"):
+                    return 2, 0.85  # P4 - visitor at door
+                if activity == "delivering" and not self._is_night(ts):
+                    return 2, 0.75  # P5 - daytime delivery
+
         # ---- face events ------------------------------------------------
         if source == "face":
             face_data = entities.get("face", {})

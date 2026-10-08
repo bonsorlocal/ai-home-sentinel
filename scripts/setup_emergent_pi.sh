@@ -85,6 +85,8 @@ Group=sentinel
 WorkingDirectory=${APP_DIR}
 Environment=EMERGENT_APP_DIR=${APP_DIR}
 Environment=PORT=${BACKEND_PORT}
+Environment=PI_BASE_URL=http://127.0.0.1:5000
+Environment=PI_VIDEO_URL=http://127.0.0.1:5000/video
 ExecStart=${APP_DIR}/venv/bin/python ${HOST_FILE}
 Restart=always
 RestartSec=5

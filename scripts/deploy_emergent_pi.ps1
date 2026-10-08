@@ -135,13 +135,27 @@ try {
         throw "Frontend build failed: build/index.html not found."
     }
 
+    function Invoke-ScpViaTmp {
+        param(
+            [string]$LocalPath,
+            [string]$RemoteDest
+        )
+        $name = Split-Path $LocalPath -Leaf
+        $tmp = "/tmp/$name"
+        scp $LocalPath "${PiHost}:$tmp"
+        if ($LASTEXITCODE -ne 0) { throw "scp to $tmp failed" }
+        ssh $PiHost "sudo mv '$tmp' '$RemoteDest'; sudo chown sentinel:sentinel '$RemoteDest'"
+        if ($LASTEXITCODE -ne 0) { throw "sudo mv to $RemoteDest failed" }
+    }
+
     Write-Host "Copying runtime artifacts to Pi..." -ForegroundColor Cyan
     ssh $PiHost "rm -rf $PiAppDir/backend $PiAppDir/frontend/build; mkdir -p $PiAppDir/frontend $PiDir/scripts"
     scp -r "$BackendDir" "${PiHost}:$PiAppDir/"
     scp -r (Join-Path $FrontendDir "build") "${PiHost}:$PiAppDir/frontend/"
-    scp (Join-Path $LocalRoot "scripts\setup_emergent_pi.sh") "${PiHost}:${PiDir}/scripts/setup_emergent_pi.sh"
-    scp (Join-Path $LocalRoot "scripts\emergent_host.py") "${PiHost}:${PiDir}/scripts/emergent_host.py"
-    scp (Join-Path $LocalRoot "scripts\emergent_requirements.pi.txt") "${PiHost}:${PiDir}/scripts/emergent_requirements.pi.txt"
+    Invoke-ScpViaTmp (Join-Path $LocalRoot "scripts\setup_emergent_pi.sh") "$PiDir/scripts/setup_emergent_pi.sh"
+    Invoke-ScpViaTmp (Join-Path $LocalRoot "scripts\emergent_host.py") "$PiDir/scripts/emergent_host.py"
+    Invoke-ScpViaTmp (Join-Path $LocalRoot "scripts\emergent_requirements.pi.txt") "$PiDir/scripts/emergent_requirements.pi.txt"
+    Invoke-ScpViaTmp (Join-Path $LocalRoot "scripts\investor_demo_on_pi.sh") "$PiDir/scripts/investor_demo_on_pi.sh"
     scp -r (Join-Path $LocalRoot "scripts\emergent_stubs") "${PiHost}:${PiDir}/scripts/"
 
     Write-Host "Configuring runtime service on Pi..." -ForegroundColor Cyan

@@ -62,6 +62,10 @@ class Notifier:
         self._cooldown = float(notify_cfg.get("cooldown_seconds", 60))
         self._notify_on_tier = int(notify_cfg.get("notify_on_tier", 2))
         self._timeout = float(notify_cfg.get("request_timeout_seconds", 10))
+        self._actions_enabled = bool(notify_cfg.get("actions_enabled", True))
+        self._notify_on_interim = bool(notify_cfg.get("notify_on_interim", True))
+        self._public_base_url = str(notify_cfg.get("public_base_url", "") or "").rstrip("/")
+        self._action_urls_fn = None
 
         secrets_file = str(notify_cfg.get("secrets_file", "secrets.yaml"))
         if secrets_path is None:
@@ -72,6 +76,10 @@ class Notifier:
         self._http_post = http_post or _default_http_post
         self._lock = threading.Lock()
         self._last_sent_at = 0.0
+
+    def set_action_urls_fn(self, fn) -> None:
+        """Optional callback ``fn(event_id) -> {action: url}`` for ntfy buttons."""
+        self._action_urls_fn = fn
 
     def is_available(self) -> bool:
         """True when notifications are enabled and configured."""
@@ -85,6 +93,9 @@ class Notifier:
             "topic_set": bool(self._topic),
             "notify_on_tier": self._notify_on_tier,
             "cooldown_seconds": self._cooldown,
+            "actions_enabled": self._actions_enabled,
+            "notify_on_interim": self._notify_on_interim,
+            "public_base_url_set": bool(self._public_base_url),
         }
 
     def should_notify(self, event: EventRecord) -> bool:
@@ -94,6 +105,9 @@ class Notifier:
         if event.tier < self._notify_on_tier:
             return False
         if event.notified:
+            return False
+        entities = event.entities or {}
+        if entities.get("interim") and not self._notify_on_interim:
             return False
         return True
 
@@ -124,7 +138,12 @@ class Notifier:
 
     def _send_ntfy(self, event: EventRecord) -> bool:
         url = f"https://ntfy.sh/{self._topic}"
-        body = f"{event.title}\n{event.summary}".strip().encode("utf-8")
+        entities = event.entities or {}
+        cloud = entities.get("cloud_scene") or {}
+        summary = event.summary
+        if isinstance(cloud, dict) and cloud.get("short_summary"):
+            summary = str(cloud.get("short_summary"))
+        body = f"{event.title}\n{summary}".strip().encode("utf-8")
         headers = {
             "Title": event.title[:200],
             "Priority": "high" if event.tier >= 2 else "default",
@@ -132,6 +151,33 @@ class Notifier:
         }
         if self._auth_token:
             headers["Authorization"] = f"Bearer {self._auth_token}"
+
+        if self._actions_enabled and self._action_urls_fn is not None:
+            try:
+                urls = self._action_urls_fn(event.id) or {}
+            except Exception as error:  # noqa: BLE001
+                print(f"[notifier] Action URL build failed: {error}")
+                urls = {}
+            actions = []
+            if urls.get("answer-door"):
+                actions.append(
+                    f"http, Answer door, {urls['answer-door']}, method=POST, clear=true"
+                )
+            if urls.get("ignore"):
+                actions.append(
+                    f"http, Ignore, {urls['ignore']}, method=POST, clear=true"
+                )
+            if urls.get("connect"):
+                actions.append(
+                    f"http, Connect me, {urls['connect']}, method=POST, clear=true"
+                )
+            if actions:
+                headers["Actions"] = "; ".join(actions)
+        elif self._actions_enabled and self._public_base_url:
+            # Fallback deep-link without signed tokens when ActionHandler not wired.
+            headers["Actions"] = (
+                f"view, Open dashboard, {self._public_base_url}/, clear=true"
+            )
 
         status = self._http_post(url, headers, body, self._timeout)
         if status < 200 or status >= 300:

@@ -70,7 +70,9 @@ _LEDGER_SYSTEM_PROMPT = (
     "Prefer footage-derived clip analysis when available. If a clip has no "
     "analysis, use the event note as fallback and say footage analysis is missing "
     "for that event. Be brief, friendly, and concrete. Refer to times in a natural "
-    "way. If context does not contain the answer, say so plainly instead of guessing."
+    "way. When making factual security claims, cite the checked evidence window "
+    "or event timestamps from context. If context does not contain the answer, "
+    "say so plainly instead of guessing."
 )
 
 _LIVE_SYSTEM_PROMPT = (
@@ -87,7 +89,9 @@ _COMBINED_SYSTEM_PROMPT = (
     "You have BOTH a live camera frame (what is happening right now) AND recent "
     "event notes from the past (with timestamps). Use the live frame for "
     "present-tense or visual questions; use the event notes for times, history, "
-    "and 'when did X happen' questions. Be brief, friendly, and concrete."
+    "and 'when did X happen' questions. Be brief, friendly, and concrete. "
+    "When making factual security claims, cite checked windows or timestamps "
+    "from the provided context instead of guessing."
 )
 
 _CASUAL_SYSTEM_PROMPT = (
@@ -97,6 +101,16 @@ _CASUAL_SYSTEM_PROMPT = (
     "explanations, and troubleshooting. Use the user's provided details and common "
     "knowledge. Do not claim specific sightings, times, or incidents unless explicit "
     "camera/event evidence context is attached."
+)
+
+_HYBRID_SYSTEM_PROMPT = (
+    "You are the assistant for a home security camera called AI Home Sentinel. "
+    "This question mixes security/footage and general assistant needs. "
+    "Structure the reply in two short parts when both apply: "
+    "(1) Evidence — only factual camera/event claims grounded in the provided "
+    "ledger/DVR/live context, citing the checked time window when available; "
+    "(2) General — everyday advice that does not invent camera events. "
+    "If evidence is missing, say so plainly before offering general help."
 )
 
 # Backwards-compatible alias used in tests/docs.
@@ -238,11 +252,73 @@ _GENERAL_HINTS = (
     "troubleshoot",
 )
 
+# Meta questions about the AI stack itself — never attach a live camera frame.
+_META_HINTS = (
+    "gemini",
+    "google api",
+    "google_api",
+    "api key",
+    "api keys",
+    "which model",
+    "what model",
+    "are you using",
+    "are you running",
+    "running through",
+    "powered by",
+    "grok",
+    "x.ai",
+    "provider",
+    "which api",
+    "what api",
+    "llm",
+    "language model",
+)
+
+
+def is_meta_question(question: str) -> bool:
+    """True when the user is asking about the brain/provider, not the camera scene."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    # Strong Gemini / Google API signals always win, even if "right now" appears.
+    strong = (
+        "gemini",
+        "google api",
+        "google_api",
+        "api key",
+        "api keys",
+        "which model",
+        "what model",
+        "running through",
+        "powered by",
+        "which api",
+        "what api",
+        "language model",
+    )
+    if any(h in q for h in strong):
+        return True
+    asks_identity = any(
+        h in q
+        for h in (
+            "are you using",
+            "are you running",
+            "which provider",
+            "what provider",
+            "your provider",
+            "your model",
+            "your api",
+        )
+    )
+    mentions_stack = any(h in q for h in ("grok", "x.ai", "provider", "llm", "google"))
+    return asks_identity and mentions_stack
+
 
 def classify_query_mode(question: str) -> str:
     """Return ``casual``, ``footage``, or ``hybrid`` query mode."""
     q = (question or "").strip().lower()
     if not q:
+        return "casual"
+    if is_meta_question(question):
         return "casual"
     footage = any(h in q for h in _LEDGER_HINTS) or any(h in q for h in _LIVE_HINTS)
     casual = any(h in q for h in _CASUAL_HINTS) or any(h in q for h in _GENERAL_HINTS)
@@ -260,6 +336,8 @@ def classify_query_source(question: str) -> str:
     """Return ``live``, ``ledger``, or ``both`` for routing ask() context."""
     q = (question or "").strip().lower()
     if not q:
+        return "ledger"
+    if is_meta_question(question):
         return "ledger"
     immediate_recap = (
         "what just happened",
@@ -599,6 +677,7 @@ class Brain:
         self._memory_enabled = bool(brain_cfg.get("memory_enabled", True))
         self._memory_max_entries = int(brain_cfg.get("memory_max_entries", 300))
         self._memory_max_context = int(brain_cfg.get("memory_max_context_items", 8))
+        self._memory_retention_days = int(brain_cfg.get("memory_retention_days", 90))
         self._google_base_url = str(
             brain_cfg.get("google_base_url", "https://generativelanguage.googleapis.com/v1beta")
         ).rstrip("/")
@@ -618,6 +697,7 @@ class Brain:
             db_path,
             enabled=self._memory_enabled,
             max_entries=self._memory_max_entries,
+            retention_days=self._memory_retention_days,
         )
         self._recent_responses: Dict[str, Dict[str, Any]] = {}
 
@@ -648,12 +728,43 @@ class Brain:
             "has_key": bool(self._api_key),
             "provider": self._effective_provider(),
             "has_google_key": bool(self._google_api_key),
+            "chat_model": self._chat_model,
             "fast_model": self._fast_model,
             "smart_model": self._smart_model,
+            "fallback_model": self._fallback_model,
             "calls_used_today": used,
             "daily_call_cap": self._daily_cap,
             "calls_remaining": max(0, self._daily_cap - used),
+            "memory_enabled": self._memory_enabled,
         }
+
+    def _meta_provider_answer(self) -> str:
+        """Plain-language answer about which cloud brain is configured (no secrets)."""
+        provider = self._effective_provider()
+        if provider == "google":
+            model = self._google_chat_model or self._google_vision_model or "gemini"
+            if self._google_api_key:
+                return (
+                    f"Yes — I am running through Google Gemini "
+                    f"(model: {model}) using the google_api_key in secrets.yaml."
+                )
+            return (
+                "I am configured for Google Gemini, but google_api_key is missing "
+                "in secrets.yaml, so cloud chat cannot run yet."
+            )
+        if provider == "grok":
+            model = self._chat_model or self._fast_model or "grok"
+            if self._api_key:
+                return (
+                    f"No — right now I am using xAI Grok (model: {model}), "
+                    "not Gemini. Set brain.provider to google and add google_api_key "
+                    "to use Gemini."
+                )
+            return (
+                "I am configured for Grok, but no API key is loaded. "
+                "Add google_api_key to secrets.yaml (preferred) or grok_api_key."
+            )
+        return "The brain provider is not configured."
 
     def ask(self, question: str) -> Dict[str, Any]:
         """Answer a question using live video, event notes, or both. Never raises."""
@@ -677,6 +788,16 @@ class Brain:
                 mode="footage",
                 source="ledger",
                 path="local_recent_recap",
+            )
+
+        if is_meta_question(question):
+            return self._reply(
+                True,
+                self._meta_provider_answer(),
+                offline=False,
+                mode="casual",
+                source="conversation",
+                path="meta_provider",
             )
 
         enrollment = _parse_owner_enrollment(question)
@@ -835,6 +956,7 @@ class Brain:
         if result.get("ok"):
             result["source"] = source
             result["mode"] = mode
+            result["answer_path"] = self._answer_path(mode)
             result.setdefault("path", "cloud_primary")
             result["plan"] = plan
             result["confidence"] = evidence["confidence"]
@@ -854,6 +976,7 @@ class Brain:
         else:
             result.setdefault("mode", mode)
             result.setdefault("source", source)
+            result.setdefault("answer_path", self._answer_path(mode))
             result.setdefault("path", "cloud_error")
             result.setdefault("confidence", evidence["confidence"])
             result.setdefault("evidence_count", evidence["evidence_count"])
@@ -1080,6 +1203,21 @@ class Brain:
         if mode == "casual":
             system = _CASUAL_SYSTEM_PROMPT
             text = f"Question: {question}{memory_block}"
+        elif mode == "hybrid":
+            system = _HYBRID_SYSTEM_PROMPT
+            if live_jpeg is not None:
+                text = (
+                    f"Recent event notes (newest first):\n{ledger_context}\n\n"
+                    f"{dvr_block}\n\n"
+                    f"The attached image is the live camera view right now.\n\n"
+                    f"Question: {question}{memory_block}"
+                )
+            else:
+                text = (
+                    f"Recent event notes (newest first):\n{ledger_context}\n\n"
+                    f"{dvr_block}\n\n"
+                    f"Question: {question}{memory_block}"
+                )
         elif source == "live" and live_jpeg is not None:
             system = _LIVE_SYSTEM_PROMPT
             text = f"Question: {question}{memory_block}"
@@ -1206,6 +1344,10 @@ class Brain:
             lines.append(line)
         return "\n".join(lines)
 
+    def _answer_path(self, mode: str) -> str:
+        """Response contract: casual dialog vs evidence-backed security answers."""
+        return "casual" if mode == "casual" else "evidence"
+
     def _reply(
         self,
         ok: bool,
@@ -1227,6 +1369,7 @@ class Brain:
             "mode": mode,
             "source": source,
             "path": path,
+            "answer_path": self._answer_path(mode),
         }
 
     def _remember_response(
@@ -1285,6 +1428,19 @@ class Brain:
         status = self._memory.status(preference_limit=self._memory_max_context)
         status["memory_enabled"] = self._memory_enabled
         return status
+
+    def clear_memory(self, *, preference_key: str = "") -> Dict[str, Any]:
+        """Delete remembered preferences / feedback (bounded trust control)."""
+        if preference_key:
+            deleted = self._memory.delete_preference(preference_key)
+            return {
+                "ok": True,
+                "deleted": deleted,
+                "scope": "preference",
+                "preference_key": preference_key,
+            }
+        deleted = self._memory.clear_all()
+        return {"ok": True, "deleted": deleted, "scope": "all"}
 
     def owner_profile_status(self) -> Dict[str, Any]:
         profile = self._memory.get_owner_profile()

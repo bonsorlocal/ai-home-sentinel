@@ -19,11 +19,17 @@ If another note or comment conflicts with this file, follow this file.
 |-------|-------|--------|
 | 9A.1 | Roadmap/config/doc conflict cleanup | Done |
 | 9A.2 | USB-boot DVR policy + health checks | Done |
-| 9B | Reasoning quality (planner + evidence confidence) | Done |
-| 9C | Owner enrollment from natural language | Done |
-| 9D | Resident capabilities + privileged gates | Done |
-| 9E | Google-first provider with Grok fallback | Done |
-| 10 | Household expansion + optional UX tracks | Partial (profiles/residents; PWA/telephony feature-flagged off) |
+| 9A.3 | DVR pin/export APIs for 48h review | Done |
+| 9B | Adaptive ResourceGuard + detector `auto`/`cloud` | Done |
+| 9B.1 | Reasoning quality (planner + evidence confidence) | Done |
+| 9C | Cloud live door vision + reasoner P4/P5 | Done |
+| 9C.1 | Owner enrollment from natural language | Done |
+| 9D | ntfy action buttons + ActionHandler | Done |
+| 9D.1 | Resident capabilities + privileged gates | Done |
+| 9E | CameraVoice (`voice_out`) + Google TTS playback | Done |
+| 9E.1 | Google-first provider with Grok fallback | Done |
+| 9F | On-demand DVR export + brain DVR context | Done |
+| 10 | Household expansion + optional Twilio bridge | Partial (profiles; telephony stub behind flags) |
 
 ## Phase 9 detail
 

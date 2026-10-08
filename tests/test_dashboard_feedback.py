@@ -20,6 +20,7 @@ class _FakeBrain:
         self.enroll_payload = None
         self.saved_resident = None
         self.preference_payload = None
+        self.clear_payload = None
 
     def capture_feedback(self, payload):
         self.payload = payload
@@ -52,6 +53,10 @@ class _FakeBrain:
     def set_owner_preference(self, key, value):
         self.preference_payload = (key, value)
         return {"name": "Jordan", "role": "owner_admin", "preferences": {key: value}}
+
+    def clear_memory(self, preference_key=""):
+        self.clear_payload = preference_key
+        return {"ok": True, "deleted": 2, "scope": "all" if not preference_key else "preference"}
 
 
 def test_feedback_endpoint_passes_payload_to_brain():
@@ -95,6 +100,19 @@ def test_chat_memory_status_endpoint():
     data = resp.get_json()
     assert data["enabled"] is True
     assert data["entry_count"] == 3
+
+
+def test_chat_memory_clear_endpoint():
+    fake_brain = _FakeBrain()
+    runtime = SimpleNamespace(brain=fake_brain, ledger=SimpleNamespace(insert=lambda **_: None))
+    app = create_app(Config({"dashboard": {"require_token": False}}), runtime=runtime)
+    client = app.test_client()
+    resp = client.post("/api/chat/memory/clear", json={})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["deleted"] == 2
+    assert fake_brain.clear_payload == ""
 
 
 def test_owner_profile_endpoints():

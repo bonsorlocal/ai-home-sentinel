@@ -70,10 +70,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "detector": {
         "enabled": True,
-        "backend": "ultralytics",
+        "backend": "auto",
         "model_path": "models/yolo_nano.pt",
         "confidence": 0.45,
         "run_every_n_seconds": 1.0,
+        "cloud_run_every_n_seconds": 6.0,
+        "cloud_daily_call_cap": 100,
+        "cloud_timeout_seconds": 20,
+        "cloud_provider": "auto",
         "classes": [
             "person",
             "dog",
@@ -83,6 +87,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "backpack",
             "suitcase",
         ],
+    },
+    "live_vision": {
+        "enabled": True,
+        "analyze_every_seconds": 10,
+        "daily_call_cap": 80,
+        "request_timeout_seconds": 20,
+        "jpeg_quality": 70,
+        "max_width": 640,
+        "min_confidence": 0.55,
+        "provider": "auto",
+        "secrets_file": "secrets.yaml",
+    },
+    "voice_out": {
+        "enabled": False,
+        "device": "default",
+        "tts_provider": "google",
+        "player": "auto",
+        "max_chars": 300,
+    },
+    "telephony": {
+        "enabled": False,
+        "owner_number": "",
+        "from_number": "",
+        "twiml_url": "",
+        "request_timeout_seconds": 15,
+        "secrets_file": "secrets.yaml",
     },
     "face_recognition": {
         "enabled": False,
@@ -173,6 +203,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "memory_enabled": True,
         "memory_max_entries": 300,
         "memory_max_context_items": 8,
+        "memory_retention_days": 90,
         "secrets_file": "secrets.yaml",
     },
     "video_metadata": {
@@ -194,6 +225,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "repeat_person_window_minutes": 5,
         "repeat_person_threshold": 3,
         "motion_precedes_seconds": 90,
+        "visitor_min_confidence": 0.55,
     },
     "notifications": {
         "enabled": False,
@@ -201,6 +233,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "topic": "",
         "cooldown_seconds": 60,
         "notify_on_tier": 2,
+        "notify_on_interim": True,
+        "actions_enabled": True,
+        "action_token_ttl_seconds": 900,
+        "public_base_url": "",
         "request_timeout_seconds": 10,
         "secrets_file": "secrets.yaml",
     },
@@ -240,6 +276,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "drop_old_frames": True,
         "log_fps_every_seconds": 10,
         "max_cpu_temp_celsius": 75,
+        "adaptive_ai_enabled": True,
+        "memory_warn_percent": 75,
+        "memory_offload_percent": 85,
+        "memory_recover_percent": 70,
+        "memory_poll_seconds": 10,
     },
     "household": {
         "enabled": True,
@@ -321,31 +362,53 @@ class Config:
         return copy.deepcopy(self._data)
 
 
-def load_config(path: str | None = None) -> Config:
+def _read_yaml_dict(path: str) -> Dict[str, Any]:
+    """Load a YAML mapping, or return {} with a warning if it is unusable."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle)
+        if isinstance(loaded, dict):
+            return loaded
+        print(f"[config] Warning: {path} did not contain settings; ignoring it.")
+    except Exception as error:  # noqa: BLE001 - keep the app alive
+        print(f"[config] Warning: could not read {path}: {error}. Ignoring it.")
+    return {}
+
+
+def load_config(path: str | None = None, local_path: str | None = None) -> Config:
     """Load settings from ``config.yaml`` merged on top of the defaults.
+
+    When loading the project ``config.yaml``, an optional gitignored
+    ``config.local.yaml`` is merged last so a Windows PC can use the laptop
+    webcam without changing the Pi production file.
 
     If the file does not exist or cannot be read, the defaults are used and a
     warning is printed, so the program still starts.
     """
+    using_project_default = path is None
     if path is None:
         path = os.path.join(_project_root(), "config.yaml")
 
     file_data: Dict[str, Any] = {}
     if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                loaded = yaml.safe_load(handle)
-            if isinstance(loaded, dict):
-                file_data = loaded
-            else:
-                print(
-                    f"[config] Warning: {path} did not contain settings; "
-                    "using defaults."
-                )
-        except Exception as error:  # noqa: BLE001 - keep the app alive
-            print(f"[config] Warning: could not read {path}: {error}. Using defaults.")
+        file_data = _read_yaml_dict(path)
+        if not file_data:
+            print(f"[config] Warning: {path} had no usable settings; using defaults.")
     else:
         print(f"[config] Warning: {path} not found. Using built-in defaults.")
 
     merged = _deep_merge(DEFAULT_CONFIG, file_data)
+
+    if local_path is None and using_project_default:
+        skip_local = os.environ.get("SENTINEL_SKIP_LOCAL_CONFIG") or os.environ.get(
+            "PYTEST_CURRENT_TEST"
+        )
+        if not skip_local:
+            local_path = os.path.join(_project_root(), "config.local.yaml")
+    if local_path and os.path.exists(local_path):
+        local_data = _read_yaml_dict(local_path)
+        if local_data:
+            merged = _deep_merge(merged, local_data)
+            print(f"[config] Applied local overlay: {local_path}")
+
     return Config(merged)

@@ -13,6 +13,7 @@ from datetime import datetime
 import os
 from typing import Any, Dict, List, Optional
 
+from sentinel.actions import ActionHandler
 from sentinel.brain import Brain
 from sentinel.clip_metadata import ClipMetadataWorker
 from sentinel.config import Config
@@ -21,11 +22,15 @@ from sentinel.dvr import ContinuousRecorder
 from sentinel.events import EventLedger, EventRecord
 from sentinel.face_recognition_module import FaceRecognizer
 from sentinel.frame_store import FrameStore
+from sentinel.live_vision import CloudLiveVisionWorker
 from sentinel.motion import MotionDetector
 from sentinel.notifier import Notifier
 from sentinel.pi_bridge import PiBridge
 from sentinel.reasoner import Reasoner
+from sentinel.resource_guard import ResourceGuard
 from sentinel.storage import ClipStorage, SnapshotStorage
+from sentinel.telephony import TelephonyBridge
+from sentinel.voice_out import CameraVoice
 from sentinel.google_cloud import GoogleCloudServices, gemini_keyframe_analysis_is_weak
 from sentinel.utils import now_iso
 
@@ -88,6 +93,8 @@ class SentinelRuntime:
         self._last_clip_saved_at = 0.0
         self._session_seq = 0
         self._face_callback_errors = 0
+        self._last_interim_notify_at = 0.0
+        self._last_ai_mode = "local"
 
         self.motion = MotionDetector(
             config,
@@ -97,8 +104,16 @@ class SentinelRuntime:
             on_session_ended=self._on_motion_session_ended,
             on_session_frame=self._on_motion_session_frame,
         )
+        self.resource_guard = ResourceGuard(
+            config,
+            cloud_available_fn=self._cloud_ai_available,
+        )
         self.detector = ObjectDetector(
-            config, frame_store, self.motion, on_detection=self._on_detection
+            config,
+            frame_store,
+            self.motion,
+            on_detection=self._on_detection,
+            mode_fn=lambda: self.resource_guard.mode,
         )
         self.faces = FaceRecognizer(
             config,
@@ -120,6 +135,26 @@ class SentinelRuntime:
         self.notifier = Notifier(config)
         self.clip_metadata = ClipMetadataWorker(config, self.ledger)
         self.google = GoogleCloudServices(config)
+        synthesize = None
+        if self.google.text_to_speech.is_available():
+            synthesize = self.google.text_to_speech.synthesize
+        self.voice_out = CameraVoice(config, synthesize_fn=synthesize)
+        self.telephony = TelephonyBridge(config)
+        self.actions = ActionHandler(
+            config,
+            self.ledger,
+            speak_fn=self.voice_out.speak,
+            brain_ask_fn=self.brain.ask,
+            telephony_fn=self.telephony.connect_owner,
+        )
+        self.notifier.set_action_urls_fn(self.actions.action_urls)
+        self.live_vision = CloudLiveVisionWorker(
+            config,
+            frame_getter=frame_store.get_frame,
+            session_active_fn=lambda: bool(self._active_session)
+            and not bool((self._active_session or {}).get("closed")),
+            on_scene=self._on_cloud_scene,
+        )
         self.pi_bridge = PiBridge(
             config,
             self.ledger,
@@ -132,22 +167,27 @@ class SentinelRuntime:
             self.dvr.configure_auto_summaries(analyzer_fn=self.clip_metadata.analyze_video)
         else:
             self.dvr.configure_auto_summaries()
+        self.resource_guard.start()
         self.dvr.start()
         self.motion.start()
         self.detector.start()
         self.faces.start()
+        self.live_vision.start()
         self.clip_metadata.start()
         self.pi_bridge.start()
 
     def stop(self) -> None:
+        self.live_vision.stop()
         self.dvr.stop()
         self.faces.stop()
         self.detector.stop()
         self.motion.stop()
         self.clip_metadata.stop()
         self.pi_bridge.stop()
+        self.resource_guard.stop()
 
     def status(self) -> Dict[str, Any]:
+        self._sync_ai_mode()
         face_status = dict(self.faces.status())
         face_status["person_recently_detected"] = self._person_recently_detected()
         face_status["face_callback_errors"] = self._face_callback_errors
@@ -166,14 +206,124 @@ class SentinelRuntime:
             "dvr": self.dvr.status(),
             "video_metadata": self.clip_metadata.status(),
             "google": self.google.status(),
+            "live_vision": self.live_vision.status(),
+            "resource_guard": self.resource_guard.status(),
+            "ai_mode": self.resource_guard.mode,
+            "voice_out": self.voice_out.status(),
+            "actions": self.actions.status(),
+            "telephony": self.telephony.status(),
             "session_active": bool(self._active_session),
             "event_count": self.ledger.count(),
             "owner_profile": self.brain.owner_profile_status(),
             "pi_bridge": self.pi_bridge.status(),
         }
 
+    def _cloud_ai_available(self) -> bool:
+        try:
+            if getattr(self, "live_vision", None) is not None and self.live_vision.is_available():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return bool(self.detector._cloud_available())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _sync_ai_mode(self) -> None:
+        """React to ResourceGuard mode changes (unload/reload local models)."""
+        mode = self.resource_guard.mode
+        if mode == self._last_ai_mode:
+            return
+        previous = self._last_ai_mode
+        self._last_ai_mode = mode
+        if mode in ("cloud", "degraded"):
+            self.detector.unload_for_offload()
+            # Face recognition is heavy; pause when offloaded.
+            try:
+                if self.faces.is_running():
+                    self.faces.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        elif mode == "local" and previous in ("cloud", "degraded"):
+            self.detector.ensure_local()
+            try:
+                if bool((self._config.get("face_recognition") or {}).get("enabled", False)):
+                    self.faces.start()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_cloud_scene(self, scene: Dict[str, Any], frame) -> None:
+        """Interim tier-2 path when live cloud vision sees a door visitor."""
+        session = self._active_session
+        if session is None or bool(session.get("closed")):
+            return
+        session["cloud_scene"] = dict(scene)
+        activity = str(scene.get("activity", "none"))
+        visitor = bool(scene.get("visitor_at_door", False))
+        if not visitor and activity not in ("knocking", "waiting", "delivering"):
+            return
+        # Avoid spamming interim events for the same session.
+        if session.get("interim_notified"):
+            return
+
+        entities: Dict[str, Any] = {
+            "cloud_scene": dict(scene),
+            "interim": True,
+            "session": {
+                "session_id": session.get("session_id"),
+                "started_at": session.get("started_at"),
+            },
+            "event_type": "door_visitor" if visitor else f"door_{activity}",
+        }
+        recent = self.ledger.list_recent(limit=20)
+        tier, importance = self.reasoner.classify("system", entities, recent)
+        if tier < 2:
+            return
+
+        summary = str(scene.get("short_summary") or f"Door activity: {activity}")
+        title = "Visitor at the door"
+        if activity == "knocking":
+            title = "Someone is knocking"
+        elif activity == "delivering":
+            title = "Delivery at the door"
+        elif activity == "waiting":
+            title = "Someone is waiting at the door"
+
+        snapshot_path = None
+        if frame is not None and self._save_on_tier2:
+            snapshot_path = self.storage.save_snapshot(frame, prefix="door")
+
+        record = self._insert_event(
+            source="system",
+            title=title,
+            summary=summary,
+            tier=tier,
+            importance=importance,
+            entities=entities,
+            snapshot_path=snapshot_path,
+        )
+        session["interim_notified"] = True
+        self._last_interim_notify_at = time.monotonic()
+        self._annotate_dvr_from_event(record)
+
     def _insert_event(self, **kwargs: Any) -> EventRecord:
         """Insert one session event and send downstream updates."""
+        self._sync_ai_mode()
+        # Attach latest cloud scene onto closing session events when present.
+        entities = dict(kwargs.get("entities") or {})
+        session = self._active_session
+        if session and session.get("cloud_scene") and "cloud_scene" not in entities:
+            entities["cloud_scene"] = dict(session["cloud_scene"])
+            kwargs["entities"] = entities
+            if kwargs.get("tier", 1) < 2:
+                recent = self.ledger.list_recent(limit=20)
+                tier, importance = self.reasoner.classify(
+                    str(kwargs.get("source", "motion")),
+                    entities,
+                    recent,
+                )
+                kwargs["tier"] = tier
+                kwargs["importance"] = importance
         record = self.ledger.insert(**kwargs)
         if record.clip_path:
             self.clip_metadata.enqueue(record.id, record.clip_path)

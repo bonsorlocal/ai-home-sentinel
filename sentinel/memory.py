@@ -7,7 +7,8 @@ import os
 import re
 import sqlite3
 import threading
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from sentinel.utils import now_iso
 
@@ -50,13 +51,28 @@ CREATE INDEX IF NOT EXISTS idx_resident_profiles_updated_at
 ON resident_profiles(updated_at DESC);
 """
 
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(?:api[_-]?key|token|password|secret)\b\s*[:=]\s*\S+"),
+    re.compile(r"(?i)\bsk-[A-Za-z0-9]{10,}\b"),
+    re.compile(r"(?i)\bxai-[A-Za-z0-9]{10,}\b"),
+    re.compile(r"(?i)\bAIza[0-9A-Za-z\-_]{20,}\b"),
+)
+
 
 class MemoryStore:
     """Bounded persistent memory for explicit and inferred chat feedback."""
 
-    def __init__(self, database_path: str, *, enabled: bool, max_entries: int) -> None:
+    def __init__(
+        self,
+        database_path: str,
+        *,
+        enabled: bool,
+        max_entries: int,
+        retention_days: int = 90,
+    ) -> None:
         self._enabled = bool(enabled)
         self._max_entries = max(10, int(max_entries or 200))
+        self._retention_days = max(1, int(retention_days or 90))
         self._lock = threading.Lock()
         self._db_path = str(database_path or "").strip()
         if self._enabled and self._db_path:
@@ -82,6 +98,9 @@ class MemoryStore:
     ) -> None:
         if not self._enabled:
             return
+        question = self._redact(question or "")
+        answer = self._redact(answer or "")
+        correction = self._redact(correction or "")
         pref_key = ""
         pref_value = ""
         if remember_preference and correction:
@@ -89,13 +108,13 @@ class MemoryStore:
         payload = {
             "created_at": now_iso(),
             "memory_type": "explicit_feedback",
-            "question": question or "",
-            "answer": answer or "",
+            "question": question,
+            "answer": answer,
             "mode": mode or "",
             "source": source or "",
             "response_path": path or "",
             "helpful": None if helpful is None else int(bool(helpful)),
-            "correction": correction or "",
+            "correction": correction,
             "preference_key": pref_key,
             "preference_value": pref_value,
             "metadata": json.dumps({"remember_preference": bool(remember_preference)}),
@@ -106,13 +125,13 @@ class MemoryStore:
                 {
                     "created_at": now_iso(),
                     "memory_type": "explicit_preference",
-                    "question": question or "",
-                    "answer": answer or "",
+                    "question": question,
+                    "answer": answer,
                     "mode": mode or "",
                     "source": source or "",
                     "response_path": path or "",
                     "helpful": None,
-                    "correction": correction or "",
+                    "correction": correction,
                     "preference_key": pref_key,
                     "preference_value": pref_value,
                     "metadata": "{}",
@@ -123,25 +142,28 @@ class MemoryStore:
     def capture_inferred_feedback(self, *, question: str, answer: str) -> None:
         if not self._enabled:
             return
-        pref_key, pref_value = self._extract_preference(question or "")
-        if not pref_key or not pref_value:
+        question = self._redact(question or "")
+        answer = self._redact(answer or "")
+        preferences = self._extract_preferences(question)
+        if not preferences:
             return
-        self._insert(
-            {
-                "created_at": now_iso(),
-                "memory_type": "inferred_preference",
-                "question": question or "",
-                "answer": answer or "",
-                "mode": "hybrid",
-                "source": "live",
-                "response_path": "cloud_primary",
-                "helpful": None,
-                "correction": "",
-                "preference_key": pref_key,
-                "preference_value": pref_value,
-                "metadata": "{}",
-            }
-        )
+        for pref_key, pref_value in preferences:
+            self._insert(
+                {
+                    "created_at": now_iso(),
+                    "memory_type": "inferred_preference",
+                    "question": question,
+                    "answer": answer,
+                    "mode": "hybrid",
+                    "source": "conversation",
+                    "response_path": "cloud_primary",
+                    "helpful": None,
+                    "correction": "",
+                    "preference_key": pref_key,
+                    "preference_value": pref_value,
+                    "metadata": "{}",
+                }
+            )
         self._prune()
 
     def build_prompt_context(self, *, limit: int) -> str:
@@ -192,6 +214,7 @@ class MemoryStore:
                 "enabled": False,
                 "entry_count": 0,
                 "max_entries": self._max_entries,
+                "retention_days": self._retention_days,
                 "preferences": [],
                 "owner_profile": None,
             }
@@ -203,9 +226,38 @@ class MemoryStore:
             "enabled": True,
             "entry_count": count,
             "max_entries": self._max_entries,
+            "retention_days": self._retention_days,
             "preferences": self._list_recent_preferences(limit=max(1, int(preference_limit))),
             "owner_profile": self.get_owner_profile(),
         }
+
+    def clear_all(self) -> int:
+        """Delete all conversational memory rows. Returns deleted count."""
+        if not self._enabled:
+            return 0
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute("SELECT COUNT(*) AS n FROM conversational_memory").fetchone()
+                count = int(row["n"]) if row else 0
+                conn.execute("DELETE FROM conversational_memory")
+                conn.commit()
+        return count
+
+    def delete_preference(self, preference_key: str) -> int:
+        """Delete rows for one preference key. Returns deleted count."""
+        if not self._enabled:
+            return 0
+        key = str(preference_key or "").strip()
+        if not key:
+            return 0
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "DELETE FROM conversational_memory WHERE preference_key = ?",
+                    (key,),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
 
     def upsert_owner_profile(self, profile: Dict[str, Any]) -> Dict[str, Any]:
         if not self._enabled:
@@ -302,23 +354,82 @@ class MemoryStore:
         current["preferences"] = prefs
         return self.upsert_owner_profile(current)
 
-    def _extract_preference(self, text: str) -> tuple[str, str]:
+    def _extract_preference(self, text: str) -> Tuple[str, str]:
+        prefs = self._extract_preferences(text)
+        if not prefs:
+            return "", ""
+        return prefs[0]
+
+    def _extract_preferences(self, text: str) -> List[Tuple[str, str]]:
         value = (text or "").strip()
         if not value:
-            return "", ""
-        patterns = (
+            return []
+        found: List[Tuple[str, str]] = []
+        lower = value.lower()
+
+        name_patterns = (
             r"\bmy name is ([A-Za-z][A-Za-z0-9_\- ]{1,39})\b",
             r"\bi(?:'m| am) ([A-Za-z][A-Za-z0-9_\- ]{1,39})\b",
             r"\bcall me ([A-Za-z][A-Za-z0-9_\- ]{1,39})\b",
             r"\bremember me as ([A-Za-z][A-Za-z0-9_\- ]{1,39})\b",
         )
-        for pattern in patterns:
+        for pattern in name_patterns:
             match = re.search(pattern, value, flags=re.IGNORECASE)
             if match:
                 name = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?:;")
-                if name:
-                    return "preferred_name", name
-        return "", ""
+                # Avoid treating role phrases as names.
+                if name and name.lower() not in {
+                    "the owner",
+                    "owner",
+                    "admin",
+                    "an owner",
+                }:
+                    found.append(("preferred_name", name))
+                    break
+
+        if any(p in lower for p in ("be brief", "keep it short", "shorter answers", "be concise")):
+            found.append(("response_length", "brief"))
+        elif any(p in lower for p in ("more detail", "be detailed", "longer answers")):
+            found.append(("response_length", "detailed"))
+
+        if any(p in lower for p in ("be direct", "no fluff", "straight to the point")):
+            found.append(("tone", "direct"))
+        elif any(p in lower for p in ("be warmer", "friendly tone", "be friendly")):
+            found.append(("tone", "warm"))
+        elif any(p in lower for p in ("be formal", "formal tone")):
+            found.append(("tone", "formal"))
+
+        if any(
+            p in lower
+            for p in (
+                "only if certain",
+                "only answer if certain",
+                "if certain",
+                "high confidence",
+                "don't speculate",
+                "do not speculate",
+                "be certain",
+            )
+        ):
+            found.append(("certainty_level", "high"))
+        elif any(p in lower for p in ("it's ok to guess", "best guess", "speculate if needed")):
+            found.append(("certainty_level", "exploratory"))
+
+        # Deduplicate by key, keep first match.
+        seen = set()
+        unique: List[Tuple[str, str]] = []
+        for key, pref_value in found:
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((key, pref_value))
+        return unique
+
+    def _redact(self, text: str) -> str:
+        value = str(text or "")
+        for pattern in _SECRET_PATTERNS:
+            value = pattern.sub("[redacted]", value)
+        return value
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -384,8 +495,15 @@ class MemoryStore:
         ]
 
     def _prune(self) -> None:
+        cutoff = (datetime.now() - timedelta(days=self._retention_days)).isoformat(
+            timespec="seconds"
+        )
         with self._lock:
             with self._connect() as conn:
+                conn.execute(
+                    "DELETE FROM conversational_memory WHERE created_at < ?",
+                    (cutoff,),
+                )
                 row = conn.execute("SELECT COUNT(*) AS n FROM conversational_memory").fetchone()
                 count = int(row["n"]) if row else 0
                 over = count - self._max_entries
@@ -401,4 +519,4 @@ class MemoryStore:
                         """,
                         (int(over),),
                     )
-                    conn.commit()
+                conn.commit()

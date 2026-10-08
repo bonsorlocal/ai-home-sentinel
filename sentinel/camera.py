@@ -21,6 +21,7 @@ shows the camera as unavailable instead of the whole program dying.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Callable, Optional, Tuple
@@ -250,7 +251,14 @@ class Camera:
     def _open_backend(self) -> Optional[Tuple[Reader, Closer, str]]:
         """Open the camera according to ``camera.type``, with auto-fallback."""
         if self._type == "picamera2":
-            # Strict Pi-camera mode: never fall back to a USB/demo webcam.
+            # Strict Pi-camera mode on Linux. On a Windows/macOS laptop there is
+            # no CSI camera, so use the PC webcam instead of failing forever.
+            if sys.platform.startswith("win") or sys.platform == "darwin":
+                _log(
+                    "camera.type is picamera2, but this is not a Raspberry Pi. "
+                    "Using the OpenCV webcam backend for local testing."
+                )
+                return self._open_opencv()
             return self._open_picamera2()
         if self._type == "opencv":
             return self._open_opencv()
@@ -339,8 +347,33 @@ class Camera:
         _log(self._message)
         return None
 
+    def _opencv_backends(self) -> list[int]:
+        """Prefer DirectShow on Windows; MSMF as a second try; then default."""
+        backends: list[int] = []
+        if cv2 is None:
+            return backends
+        if sys.platform.startswith("win"):
+            for name in ("CAP_DSHOW", "CAP_MSMF"):
+                value = getattr(cv2, name, None)
+                if isinstance(value, int):
+                    backends.append(value)
+        backends.append(getattr(cv2, "CAP_ANY", 0))
+        # Deduplicate while keeping order.
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for backend in backends:
+            if backend not in seen:
+                seen.add(backend)
+                ordered.append(backend)
+        return ordered
+
+    def _opencv_indices(self) -> list[int]:
+        if self._index is not None:
+            return [int(self._index)]
+        return [0, 1, 2]
+
     def _open_opencv(self) -> Optional[Tuple[Reader, Closer, str]]:
-        """Open a USB/V4L2 webcam via OpenCV, or return None on failure."""
+        """Open a USB/V4L2/DirectShow webcam via OpenCV, or return None."""
         if cv2 is None:
             self._message = (
                 "OpenCV is not installed, so the USB-camera backend is "
@@ -349,32 +382,48 @@ class Camera:
             _log(self._message)
             return None
 
+        last_error = ""
         try:
-            capture = cv2.VideoCapture(0)
-            if not capture.isOpened():
-                capture.release()
-                self._message = "No USB camera found at index 0."
-                _log(self._message)
-                return None
+            for index in self._opencv_indices():
+                for backend in self._opencv_backends():
+                    capture = cv2.VideoCapture(index, backend)
+                    if not capture.isOpened():
+                        capture.release()
+                        continue
 
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
-            capture.set(cv2.CAP_PROP_FPS, self._target_fps)
-            # Keep the driver buffer tiny so we always read the freshest frame
-            # and drop stale ones, matching the "freshest frame" Pi-5 approach.
-            try:
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            except Exception:  # noqa: BLE001 - not all drivers support this
-                pass
+                    capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+                    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+                    capture.set(cv2.CAP_PROP_FPS, self._target_fps)
+                    # Keep the driver buffer tiny so we always read the freshest
+                    # frame and drop stale ones.
+                    try:
+                        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:  # noqa: BLE001 - not all drivers support this
+                        pass
 
-            def read():
-                ok, frame = capture.read()
-                return frame if ok else None
+                    ok, probe = capture.read()
+                    if not ok or probe is None:
+                        capture.release()
+                        last_error = f"index {index} opened but returned no frame"
+                        continue
 
-            def close():
-                capture.release()
+                    def read(cap=capture):
+                        grabbed, frame = cap.read()
+                        return frame if grabbed else None
 
-            return read, close, "OpenCV VideoCapture (USB camera)"
+                    def close(cap=capture):
+                        cap.release()
+
+                    backend_name = f"OpenCV VideoCapture (index {index})"
+                    return read, close, backend_name
+
+            self._message = (
+                last_error
+                or "No USB / laptop webcam found. On Windows, check Privacy → "
+                "Camera, then set camera.index to 0 or 1 in config.local.yaml."
+            )
+            _log(self._message)
+            return None
         except Exception as error:  # noqa: BLE001 - report, don't crash the app
             self._message = f"Could not start the USB camera: {error}"
             _log(self._message)

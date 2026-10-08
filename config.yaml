@@ -49,10 +49,13 @@ motion:
 
 detector:
   enabled: true
-  backend: "ultralytics"             # AI backend; later: "ncnn" or "openvino"
+  backend: "auto"                    # auto | ultralytics | cloud | off
   model_path: "models/yolo_nano.pt"  # path to the YOLO model file
   confidence: 0.45                   # minimum confidence to count a detection
   run_every_n_seconds: 2.0           # run detection at most this often
+  cloud_run_every_n_seconds: 6.0     # slower when ResourceGuard offloads to cloud
+  cloud_daily_call_cap: 100
+  cloud_provider: "auto"
   classes:                           # only look for these object types
     - person
     - dog
@@ -61,6 +64,32 @@ detector:
     - bicycle
     - backpack
     - suitcase
+
+live_vision:             # Phase 9C - cloud door-scene analysis during motion
+  enabled: true
+  analyze_every_seconds: 10
+  daily_call_cap: 80
+  request_timeout_seconds: 20
+  jpeg_quality: 70
+  max_width: 640
+  min_confidence: 0.55
+  provider: "auto"
+  secrets_file: "secrets.yaml"
+
+voice_out:               # Phase 9E - speak at the Pi camera (USB speaker)
+  enabled: false         # set true when a speaker is wired to the Pi
+  device: "default"      # ALSA device name for aplay
+  tts_provider: "google" # uses google.text_to_speech when credentials exist
+  player: "auto"         # auto | ffplay | aplay
+  max_chars: 300
+
+telephony:               # Phase 10 - optional Twilio "Connect me" bridge
+  enabled: false
+  owner_number: ""       # E.164 e.g. +15551234567
+  from_number: ""        # Twilio number
+  twiml_url: ""          # optional hosted TwiML; else twimlets message
+  request_timeout_seconds: 15
+  secrets_file: "secrets.yaml"
 
 face_recognition:
   enabled: true                                    # Phase 5 enabled
@@ -149,12 +178,16 @@ google:                  # GCP service account APIs (Video Intelligence + TTS)
     daily_char_cap: 20000
     request_timeout_seconds: 20
 
-notifications:           # Phase 7b - phone push alerts for tier-2 events
+notifications:           # Phase 7b/9D - phone push + action buttons
   enabled: true          # home-beta: phone push for tier-2 events
   provider: "ntfy"         # ntfy.sh (free HTTP push; subscribe on your phone)
   topic: "home-sentinel-60dc9084"  # subscribe to this topic in the ntfy phone app
   cooldown_seconds: 60     # minimum seconds between pushes
   notify_on_tier: 2        # send when reasoner promotes to this tier or higher
+  notify_on_interim: true  # push during live door analysis (before session ends)
+  actions_enabled: true    # Answer / Ignore / Connect buttons on ntfy
+  action_token_ttl_seconds: 900
+  public_base_url: ""      # e.g. https://your-tunnel.example — required for action buttons
   request_timeout_seconds: 10
   secrets_file: "secrets.yaml"   # optional ntfy_auth_token for private topics
 
@@ -189,6 +222,7 @@ brain:                   # B1 "language brain" (Google/Grok) - chat + daily reca
   memory_enabled: true              # persist explicit and inferred feedback
   memory_max_entries: 300
   memory_max_context_items: 8
+  memory_retention_days: 90         # auto-prune conversational memory older than this
   secrets_file: "secrets.yaml"      # where the Grok key lives (git-ignored)
 
 video_metadata:          # Phase 8 priority - cloud clip summaries for voice queries
@@ -208,20 +242,26 @@ performance:
   drop_old_frames: true          # throw away stale frames so AI stays fresh
   log_fps_every_seconds: 10      # how often to log FPS to the console
   max_cpu_temp_celsius: 75       # warn when the Pi gets hotter than this
+  adaptive_ai_enabled: true      # Phase 9B - offload YOLO when RAM is high
+  memory_warn_percent: 75
+  memory_offload_percent: 85     # switch to cloud AI above this
+  memory_recover_percent: 70     # return to local AI below this
+  memory_poll_seconds: 10
 
-reasoner:                  # Phase 7 - tier promotion (night / repeat / unknown face)
+reasoner:                  # Phase 7/9C - tier promotion
   enabled: true
   night_hour_start: 22
   night_hour_end: 6
   repeat_person_window_minutes: 5
   repeat_person_threshold: 3
   motion_precedes_seconds: 90
+  visitor_min_confidence: 0.55   # P4/P5 cloud door-scene threshold
 
 household:                 # Phase 9C-10 - owner/resident profiles
   enabled: true
   max_residents: 8
   mobile_pwa_enabled: false    # Phase 10 Track A (optional)
-  telephony_enabled: false     # Phase 10 Track B (optional)
+  telephony_enabled: false     # Phase 10 Track B (optional; see telephony:)
 
 emergent_app:              # optional Emergent webapp (separate port on Pi)
   enabled: false           # set true after deploy_emergent_pi.ps1

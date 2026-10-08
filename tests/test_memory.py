@@ -147,3 +147,54 @@ def test_build_profile_context_includes_owner_and_residents(tmp_path):
     assert "owner_tone" in context
     assert "resident: Alex" in context
     assert "height_estimate=tall" in context
+
+
+def test_memory_infers_tone_and_certainty(tmp_path):
+    db_path = str(tmp_path / "sentinel.db")
+    memory = MemoryStore(db_path, enabled=True, max_entries=20)
+    memory.capture_inferred_feedback(
+        question="Please be brief and only answer if certain.",
+        answer="Got it.",
+    )
+    context = memory.build_prompt_context(limit=5)
+    assert "response_length: brief" in context
+    assert "certainty_level: high" in context
+
+
+def test_memory_redacts_secrets_and_supports_clear(tmp_path):
+    db_path = str(tmp_path / "sentinel.db")
+    memory = MemoryStore(db_path, enabled=True, max_entries=20)
+    memory.capture_explicit_feedback(
+        question="My api_key: sk-secretvalue123",
+        answer="ok",
+        mode="casual",
+        source="conversation",
+        path="cloud_primary",
+        helpful=True,
+        correction="Call me Jordan",
+        remember_preference=True,
+    )
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT question FROM conversational_memory ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert "sk-secretvalue123" not in row[0]
+    assert "[redacted]" in row[0]
+    deleted_pref = memory.delete_preference("preferred_name")
+    assert deleted_pref >= 1
+    # Seed one more feedback row, then clear everything.
+    memory.capture_explicit_feedback(
+        question="Was that useful?",
+        answer="Yes",
+        mode="casual",
+        source="conversation",
+        path="cloud_primary",
+        helpful=True,
+        correction="",
+        remember_preference=False,
+    )
+    assert memory.clear_all() >= 1
+    assert _row_count(db_path) == 0
+    status = memory.status()
+    assert status["retention_days"] == 90

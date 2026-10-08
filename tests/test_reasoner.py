@@ -295,6 +295,60 @@ class TestDisabledReasoner:
 
 
 # ---------------------------------------------------------------------------
+# Cloud door scene (P4 / P5)
+# ---------------------------------------------------------------------------
+
+class TestCloudSceneRules:
+    def test_knocking_visitor_is_tier2(self, reasoner: Reasoner) -> None:
+        tier, imp = reasoner.classify(
+            "system",
+            {
+                "cloud_scene": {
+                    "visitor_at_door": True,
+                    "activity": "knocking",
+                    "confidence": 0.9,
+                    "short_summary": "Someone knocking",
+                }
+            },
+            [],
+            ts=datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc),
+        )
+        assert tier == 2
+        assert imp == pytest.approx(0.85)
+
+    def test_daytime_delivery_is_tier2(self, reasoner: Reasoner) -> None:
+        tier, imp = reasoner.classify(
+            "system",
+            {
+                "cloud_scene": {
+                    "visitor_at_door": False,
+                    "activity": "delivering",
+                    "confidence": 0.8,
+                    "short_summary": "Package delivery",
+                }
+            },
+            [],
+            ts=datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc),
+        )
+        assert tier == 2
+        assert imp == pytest.approx(0.75)
+
+    def test_low_confidence_cloud_scene_ignored(self, reasoner: Reasoner) -> None:
+        tier, _ = reasoner.classify(
+            "system",
+            {
+                "cloud_scene": {
+                    "visitor_at_door": True,
+                    "activity": "knocking",
+                    "confidence": 0.2,
+                }
+            },
+            [],
+        )
+        assert tier == 1
+
+
+# ---------------------------------------------------------------------------
 # score_record tests
 # ---------------------------------------------------------------------------
 

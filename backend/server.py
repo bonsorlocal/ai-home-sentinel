@@ -312,25 +312,48 @@ async def delete_rule(rule_id: str):
 @api.post("/assistant/chat")
 async def assistant_chat(req: ChatRequest):
     online, raw = await pi_client.check_status()
+    video_ok = await pi_client.video_reachable()
+    stack_up = bool(online or video_ok)
     now = datetime.now(timezone.utc).isoformat()
     await db.chat.insert_one({"session_id": req.session_id, "role": "user", "content": req.message, "timestamp": now})
-    if not online:
-        msg = ("⚠️ The Pi Sentinel stack is offline, so I have no live data to reason over. "
-               "Please bring the Pi camera service online and try again.")
+    if not stack_up:
+        msg = ("⚠️ The Sentinel camera stack is offline, so I have no live data to reason over. "
+               "Start Sentinel on :5000 (or the Pi service) and try again.")
         await db.chat.insert_one({"session_id": req.session_id, "role": "assistant", "content": msg,
                                   "sources": [], "offline": True, "timestamp": datetime.now(timezone.utc).isoformat()})
         return {"answer": msg, "sources": [], "offline": True}
 
+    # Meta questions (Gemini / API) do not need events — answer immediately.
+    if sentinel_ai.is_meta_question(req.message):
+        answer = sentinel_ai.meta_provider_answer()
+        await db.chat.insert_one({"session_id": req.session_id, "role": "assistant", "content": answer,
+                                  "sources": [], "timestamp": datetime.now(timezone.utc).isoformat()})
+        return {"answer": answer, "sources": []}
+
     events = pi_client.as_list(await pi_client.get_json("/api/events"), "events") or []
     segments = pi_client.as_list(await pi_client.get_json("/api/dvr/segments"), "segments") or []
     people = pi_client.as_list(await pi_client.get_json("/api/people"), "people") or []
-    cameras = pi_client.normalize_status(raw)["cameras"]
+    cameras = pi_client.normalize_status(raw)["cameras"] if online else (
+        [dict(pi_client.PI_CAMERA)] if video_ok else []
+    )
     rules = await db.rules.find({}, NO_ID).to_list(200)
     settings = await db.settings.find_one({"id": "system"}, NO_ID) or {}
 
-    context, sources = sentinel_ai.build_context(req.message, events, segments, people, cameras, rules, settings)
+    jpeg = None
+    live_note = None
+    if sentinel_ai.wants_live_frame(req.message):
+        jpeg = await sentinel_ai.fetch_live_jpeg()
+        live_note = (
+            "A live JPEG frame is attached for this question."
+            if jpeg
+            else "Live frame was requested but could not be fetched from /api/live.jpg."
+        )
+
+    context, sources = sentinel_ai.build_context(
+        req.message, events, segments, people, cameras, rules, settings, live_note=live_note
+    )
     try:
-        answer = await sentinel_ai.ask_sentinel(req.session_id, req.message, context)
+        answer = await sentinel_ai.ask_sentinel(req.session_id, req.message, context, jpeg_bytes=jpeg)
     except Exception as e:
         logger.exception("Sentinel AI error")
         raise HTTPException(500, f"AI error: {e}")

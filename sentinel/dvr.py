@@ -991,11 +991,9 @@ class ContinuousRecorder:
                 seg.summary = summary
         data = [s.to_dict() for s in segments]
         active = self._active_segment_snapshot()
-        if (
-            active
-            and active.get("active")
-            and self._segment_overlaps_range(active, start_ts, end_ts)
-        ):
+        # Include the in-progress hour even when waiting for camera frames so
+        # the timeline never has a silent gap at "now".
+        if active and self._segment_overlaps_range(active, start_ts, end_ts):
             data.append(active)
         return data[: max(1, min(1000, int(limit)))]
 
@@ -1093,6 +1091,78 @@ class ContinuousRecorder:
         if self._segment_is_browser_playable(path):
             return path
         return self._transcode_for_browser(path, seg.id)
+
+    @property
+    def pinned_dir(self) -> str:
+        path = os.path.join(self._storage_root, "pinned")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def pin_segment(self, segment_id: int) -> Dict[str, Any]:
+        """Copy a segment into the pinned folder (never auto-pruned)."""
+        seg = self.get_segment(segment_id)
+        if seg is None:
+            return {"ok": False, "message": "Segment not found."}
+        src = os.path.abspath(seg.path)
+        if not os.path.exists(src):
+            return {"ok": False, "message": "Segment file missing."}
+        dest_name = f"pinned_{segment_id}_{os.path.basename(src)}"
+        dest = os.path.join(self.pinned_dir, dest_name)
+        try:
+            if not os.path.exists(dest):
+                shutil.copy2(src, dest)
+            return {
+                "ok": True,
+                "segment_id": segment_id,
+                "path": dest,
+                "message": "Segment pinned.",
+            }
+        except OSError as error:
+            return {"ok": False, "message": f"Pin failed: {error}"}
+
+    def export_range(
+        self,
+        start_ts: str,
+        end_ts: str,
+        *,
+        pin: bool = True,
+        max_segments: int = 12,
+    ) -> Dict[str, Any]:
+        """Export overlapping segments for a time window; optionally pin copies."""
+        if self.index is None:
+            return {"ok": False, "message": "DVR index unavailable.", "segments": []}
+        segments = self.index.list_range(start_ts, end_ts, limit=max(1, int(max_segments)))
+        if not segments:
+            return {
+                "ok": False,
+                "message": "No DVR segments in that range.",
+                "segments": [],
+                "start": start_ts,
+                "end": end_ts,
+            }
+        exported: List[Dict[str, Any]] = []
+        for seg in segments:
+            item: Dict[str, Any] = {
+                "id": seg.id,
+                "start_ts": seg.start_ts,
+                "end_ts": seg.end_ts,
+                "path": seg.path,
+                "summary": seg.summary,
+            }
+            if pin:
+                pinned = self.pin_segment(seg.id)
+                item["pinned"] = pinned
+                if pinned.get("ok"):
+                    item["pinned_path"] = pinned.get("path")
+            exported.append(item)
+        return {
+            "ok": True,
+            "message": f"Exported {len(exported)} segment(s).",
+            "segments": exported,
+            "start": start_ts,
+            "end": end_ts,
+            "count": len(exported),
+        }
 
     def search(self, question: str, limit: Optional[int] = None) -> List[DvrSegment]:
         if self.index is None:
