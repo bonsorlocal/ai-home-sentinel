@@ -50,6 +50,8 @@ clips:
   enabled: false
 video_metadata:
   enabled: false
+session_gate:
+  enabled: false
 """,
         encoding="utf-8",
     )
@@ -90,6 +92,8 @@ clips:
   enabled: false
 video_metadata:
   enabled: false
+session_gate:
+  enabled: false
 """,
         encoding="utf-8",
     )
@@ -121,6 +125,8 @@ clips:
   enabled: true
   clip_dir: "{clip_path.as_posix()}"
 video_metadata:
+  enabled: false
+session_gate:
   enabled: false
 """,
         encoding="utf-8",
@@ -168,6 +174,8 @@ detector:
 clips:
   enabled: false
 video_metadata:
+  enabled: false
+session_gate:
   enabled: false
 """,
         encoding="utf-8",
@@ -218,6 +226,8 @@ clips:
   min_session_seconds_for_clip: 8
 video_metadata:
   enabled: false
+session_gate:
+  enabled: false
 """,
         encoding="utf-8",
     )
@@ -258,6 +268,8 @@ clips:
   clip_dir: "{clip_path.as_posix()}"
   min_session_seconds_for_clip: 8
 video_metadata:
+  enabled: false
+session_gate:
   enabled: false
 """,
         encoding="utf-8",

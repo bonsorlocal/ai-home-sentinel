@@ -17,3 +17,7 @@ brain:
 
 video_metadata:
   provider: "google"
+
+session_gate:
+  provider: "google"        # same Google-first judge as brain / clip metadata
+  # enabled: false          # uncomment to restore always-ledger (legacy) on PC

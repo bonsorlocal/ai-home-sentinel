@@ -1,0 +1,157 @@
+openapi: 3.0.3
+info:
+  title: AI Home Sentinel API
+  version: "1.0"
+  description: >
+    Public surface for connecting a Base44 (or other) frontend to a running
+    Sentinel instance. Point the Base URL at a public HTTPS tunnel to :5000
+    (for example a Cloudflare quick tunnel).
+servers:
+  - url: https://YOUR-TUNNEL.trycloudflare.com
+    description: Replace with your live tunnel URL
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe (no auth)
+      responses:
+        "200":
+          description: OK
+  /status:
+    get:
+      operationId: getStatus
+      summary: Runtime status (camera, brain, DVR, google)
+      security:
+        - SentinelToken: []
+      responses:
+        "200":
+          description: Status JSON
+  /api/events:
+    get:
+      operationId: listEvents
+      summary: Recent event ledger entries
+      security:
+        - SentinelToken: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Event list
+  /api/live.jpg:
+    get:
+      operationId: getLiveJpeg
+      summary: Fresh live JPEG frame
+      security:
+        - SentinelToken: []
+      responses:
+        "200":
+          description: image/jpeg
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+  /video:
+    get:
+      operationId: getMjpegStream
+      summary: MJPEG live stream
+      security:
+        - SentinelToken: []
+      responses:
+        "200":
+          description: multipart MJPEG
+  /api/dvr/status:
+    get:
+      operationId: getDvrStatus
+      summary: DVR recorder status
+      security:
+        - SentinelToken: []
+      responses:
+        "200":
+          description: DVR status
+  /api/dvr/range:
+    get:
+      operationId: getDvrRange
+      summary: DVR segments in a time window
+      security:
+        - SentinelToken: []
+      parameters:
+        - in: query
+          name: start
+          schema:
+            type: string
+        - in: query
+          name: end
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Segment list
+  /api/chat:
+    post:
+      operationId: postChat
+      summary: Ask Sentinel (supports multi-turn history)
+      security:
+        - SentinelToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                history:
+                  type: array
+                  description: Prior turns, newest kept up to max_chat_history_turns
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant]
+                      content:
+                        type: string
+      responses:
+        "200":
+          description: Chat answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  answer:
+                    type: string
+                  path:
+                    type: string
+                  mode:
+                    type: string
+                  source:
+                    type: string
+  /api/summary:
+    post:
+      operationId: postDaySummary
+      summary: Summarize today's events
+      security:
+        - SentinelToken: []
+      responses:
+        "200":
+          description: Day summary
+components:
+  securitySchemes:
+    SentinelToken:
+      type: apiKey
+      in: header
+      name: X-Sentinel-Token
+      description: >
+        Dashboard token from secrets.yaml (dashboard_token). You may also send
+        Authorization Bearer &lt;token&gt; or ?token= query param.

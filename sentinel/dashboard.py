@@ -555,7 +555,8 @@ def create_app(
             )
         payload = request.get_json(silent=True) or {}
         question = str(payload.get("question", ""))
-        return jsonify(runtime.brain.ask(question))
+        history = payload.get("history")
+        return jsonify(runtime.brain.ask(question, history=history))
 
     @app.route("/api/summary", methods=["POST"])
     def api_summary():  # type: ignore[unused-ignore]

@@ -39,6 +39,10 @@ If the wrong camera opens, set `camera.index` to `1` in `config.local.yaml`. All
 
 Ready-to-import pack (OpenAPI + prompt + walkthrough): [base44-import/START_HERE.md](base44-import/START_HERE.md)
 
+### Investor landing (Emergent prompt)
+
+Paste-ready prompt + marketing brief for a static investor landing page: [investor-landing/START_HERE.md](investor-landing/START_HERE.md)
+
 ### Full product UI on PC (Emergent)
 
 With Sentinel already on `:5000`, and `google_api_key` + `mongo_atlas_url` in `secrets.yaml`:

@@ -1,16 +1,18 @@
 [Unit]
 Description=AI Home Sentinel - security camera and AI brain
 Documentation=https://github.com/bonsorlocal/ai-home-sentinel
-After=network-online.target systemd-udev-settle.service
+After=network-online.target systemd-udev-settle.service mnt-sentinel\x2ddata.mount
 Wants=network-online.target
-# Give libcamera time to enumerate CSI cameras before we open Picamera2.
-ExecStartPre=/bin/sleep 15
+# Wait for USB data stick at /mnt/sentinel-data (DVR + event logs).
+RequiresMountsFor=/mnt/sentinel-data
 
 [Service]
 Type=simple
 User=sentinel
 Group=sentinel
 WorkingDirectory=/home/sentinel/ai-home-sentinel
+# Give libcamera time to enumerate CSI cameras before we open Picamera2.
+ExecStartPre=/bin/sleep 15
 ExecStart=/home/sentinel/ai-home-sentinel/venv/bin/python /home/sentinel/ai-home-sentinel/run.py
 Restart=always
 RestartSec=5
@@ -18,8 +20,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=sentinel
 
-# Give it up to 30 s to start before systemd marks it failed
-TimeoutStartSec=30
+# Camera warmup + YOLO load can exceed 30s on a cold Pi
+TimeoutStartSec=120
 # Give it 10 s to shut down cleanly
 TimeoutStopSec=10
 

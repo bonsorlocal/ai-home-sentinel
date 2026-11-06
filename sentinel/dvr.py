@@ -224,6 +224,18 @@ class DvrIndex:
     );
     CREATE INDEX IF NOT EXISTS idx_dvr_segments_start ON dvr_segments(start_ts);
     CREATE INDEX IF NOT EXISTS idx_dvr_segments_end ON dvr_segments(end_ts);
+    CREATE TABLE IF NOT EXISTS dvr_context_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        start_ts TEXT NOT NULL,
+        end_ts TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        importance TEXT NOT NULL DEFAULT 'routine',
+        subjects TEXT NOT NULL DEFAULT '[]',
+        appearance_notes TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dvr_context_start ON dvr_context_notes(start_ts);
+    CREATE INDEX IF NOT EXISTS idx_dvr_context_end ON dvr_context_notes(end_ts);
     """
 
     def __init__(self, db_path: str):
@@ -415,6 +427,71 @@ class DvrIndex:
 
     def save_analysis(self, segment_id: int, summary: str) -> bool:
         return self.update_summary(segment_id, summary, analyzed=True)
+
+    def add_context_note(
+        self,
+        *,
+        start_ts: str,
+        end_ts: str,
+        text: str,
+        importance: str = "routine",
+        subjects: Optional[List[str]] = None,
+        appearance_notes: Optional[List[str]] = None,
+        created_at: str = "",
+    ) -> int:
+        payload = (
+            str(start_ts),
+            str(end_ts),
+            str(text or "").strip()[:800],
+            str(importance or "routine").strip().lower()[:32],
+            json.dumps([str(s) for s in (subjects or [])][:12]),
+            json.dumps([str(s) for s in (appearance_notes or [])][:12]),
+            str(created_at or start_ts),
+        )
+        with self._lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO dvr_context_notes (
+                        start_ts, end_ts, text, importance, subjects,
+                        appearance_notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    payload,
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+
+    def list_context_notes(
+        self, start_ts: str, end_ts: str, limit: int = 40
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(200, int(limit)))
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM dvr_context_notes
+                    WHERE end_ts >= ? AND start_ts <= ?
+                    ORDER BY start_ts ASC
+                    LIMIT ?
+                    """,
+                    (str(start_ts), str(end_ts), limit),
+                ).fetchall()
+        notes: List[Dict[str, Any]] = []
+        for row in rows:
+            notes.append(
+                {
+                    "id": int(row["id"]),
+                    "start_ts": str(row["start_ts"]),
+                    "end_ts": str(row["end_ts"]),
+                    "text": str(row["text"] or ""),
+                    "importance": str(row["importance"] or "routine"),
+                    "subjects": self._decode_labels(row["subjects"]),
+                    "appearance_notes": self._decode_labels(row["appearance_notes"]),
+                    "created_at": str(row["created_at"] or ""),
+                }
+            )
+        return notes
 
     def search(self, query: str, limit: int = 12) -> List[DvrSegment]:
         limit = max(1, min(100, int(limit)))
@@ -1197,6 +1274,39 @@ class ContinuousRecorder:
             summary=summary,
         )
 
+    def add_context_note(
+        self,
+        *,
+        start_ts: str,
+        end_ts: str,
+        text: str,
+        importance: str = "routine",
+        subjects: Optional[List[str]] = None,
+        appearance_notes: Optional[List[str]] = None,
+    ) -> int:
+        """Quiet DVR note for routine sessions (no ledger row)."""
+        if self.index is None:
+            return 0
+        note_id = self.index.add_context_note(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            text=text,
+            importance=importance,
+            subjects=subjects,
+            appearance_notes=appearance_notes,
+            created_at=now_iso(),
+        )
+        # Also fold a short line into overlapping segment summaries for retrieval.
+        if text.strip():
+            self.index.annotate_overlap(
+                start_ts=start_ts,
+                end_ts=end_ts,
+                person_count=1 if subjects else 0,
+                object_labels=["person"] if subjects else [],
+                summary=f"[context] {text.strip()[:220]}",
+            )
+        return note_id
+
     def build_query_context(
         self,
         question: str,
@@ -1242,6 +1352,28 @@ class ContinuousRecorder:
                 f"person_count={seg.person_count} labels={labels} "
                 f"motion_score={seg.motion_score:.3f} "
                 f"summary={seg.summary or 'n/a'}"
+            )
+        note_start = start_dt.isoformat() if used_window and start_dt else None
+        note_end = end_dt.isoformat() if used_window and end_dt else None
+        if note_start and note_end:
+            context_notes = self.index.list_context_notes(note_start, note_end, limit=40)
+        else:
+            # Fall back to notes overlapping the matched segment window.
+            if candidates:
+                context_notes = self.index.list_context_notes(
+                    candidates[0].start_ts,
+                    candidates[-1].end_ts,
+                    limit=40,
+                )
+            else:
+                context_notes = []
+        for note in context_notes:
+            who = ", ".join(note.get("subjects") or []) or "someone"
+            look = ", ".join(note.get("appearance_notes") or [])
+            look_bit = f" appearance={look}" if look else ""
+            lines.append(
+                f"- context_note#{note.get('id')} [{note.get('start_ts')} -> {note.get('end_ts')}] "
+                f"who={who}{look_bit} note={note.get('text') or 'n/a'}"
             )
         active = self._active_segment_snapshot()
         include_active = bool(active) and (

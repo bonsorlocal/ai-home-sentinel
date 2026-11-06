@@ -93,15 +93,18 @@ telephony:               # Phase 10 - optional Twilio "Connect me" bridge
 
 face_recognition:
   enabled: true                                    # Phase 5 enabled
-  known_faces_dir: "data/known_faces"
-  unknown_faces_dir: "data/events/unknown_faces"
+  # USB stick paths — prefer /mnt/sentinel-data after bootstrap_fresh_pi.sh fstab;
+  # desktop auto-mount path works until then.
+  known_faces_dir: "/mnt/sentinel-data/known_faces"
+  unknown_faces_dir: "/mnt/sentinel-data/events/unknown_faces"
   tolerance: 0.5                                   # lower = stricter match
   run_only_when_person_detected: true
 
 storage:
-  event_dir: "data/events"
-  snapshot_dir: "data/events/snapshots"
-  database_path: "data/sentinel.db"
+  # Keep bulky event logs / DB on the USB stick (16GB SD card is too small)
+  event_dir: "/mnt/sentinel-data/events"
+  snapshot_dir: "/mnt/sentinel-data/events/snapshots"
+  database_path: "/mnt/sentinel-data/sentinel.db"
   max_snapshots_per_day: 200
   save_snapshot_on_motion: false     # motion stays in the event log only
   save_snapshot_on_person: false     # person snapshots only when tier 2
@@ -109,7 +112,7 @@ storage:
 
 clips:                   # Phase 8 - save short motion clips (Ring-style)
   enabled: true          # enabled for Phase 8 validation
-  clip_dir: "data/events/clips"
+  clip_dir: "/mnt/sentinel-data/events/clips"
   save_on_motion: true     # attach clip to motion events
   save_on_detection: true  # attach clip when a person is seen or tier-2 alert
   min_seconds_between_clips: 15   # avoid filling the disk during busy periods
@@ -125,10 +128,10 @@ clips:                   # Phase 8 - save short motion clips (Ring-style)
   max_clips_per_day: 100
   prune_when_full: true    # drop oldest clip today when daily cap is hit
 
-dvr:                     # Phase 9 - always-on local USB recording
+dvr:                     # Phase 9 - always-on USB recording (separate stick on 16GB SD installs)
   enabled: true
-  storage_root: "/home/sentinel/ai-home-sentinel/data/dvr"  # OS USB drive path on this Pi
-  fallback_storage_root: ""            # optional alternate mount when primary path unavailable
+  storage_root: "/mnt/sentinel-data/dvr"
+  fallback_storage_root: "/home/sentinel/ai-home-sentinel/data/dvr"
   retention_hours: 48
   segment_seconds: 3600              # 1 hour per segment (3600 seconds)
   align_to_clock_hours: true         # rotate segments at the top of each hour
@@ -197,9 +200,9 @@ brain:                   # B1 "language brain" (Google/Grok) - chat + daily reca
   base_url: "https://api.x.ai/v1"   # xAI Grok API (OpenAI-compatible)
   google_base_url: "https://generativelanguage.googleapis.com/v1beta"
   chat_model: "grok-4.3"            # quality-first model for interactive chat
-  google_chat_model: "gemini-1.5-flash"
-  google_smart_model: "gemini-1.5-pro"
-  google_vision_model: "gemini-1.5-flash"
+  google_chat_model: "gemini-3.8-flash"
+  google_smart_model: "gemini-3.8-flash"
+  google_vision_model: "gemini-3.8-flash"
   fast_model: "grok-4.3"            # legacy alias (still used for compatibility)
   smart_model: "grok-4.3"           # the "summarize my day" recap
   fallback_model: "grok-4.3"        # retry model when primary cloud call fails
@@ -223,6 +226,7 @@ brain:                   # B1 "language brain" (Google/Grok) - chat + daily reca
   memory_max_entries: 300
   memory_max_context_items: 8
   memory_retention_days: 90         # auto-prune conversational memory older than this
+  max_chat_history_turns: 10        # prior chat turns sent with each /api/chat ask
   secrets_file: "secrets.yaml"      # where the Grok key lives (git-ignored)
 
 video_metadata:          # Phase 8 priority - cloud clip summaries for voice queries
@@ -231,10 +235,25 @@ video_metadata:          # Phase 8 priority - cloud clip summaries for voice que
   base_url: "https://api.x.ai/v1"
   model: "grok-4.3"
   google_base_url: "https://generativelanguage.googleapis.com/v1beta"
-  google_model: "gemini-1.5-flash"
+  google_model: "gemini-3.8-flash"
   max_keyframes: 3
   daily_call_cap: 30
   request_timeout_seconds: 20
+  secrets_file: "secrets.yaml"
+
+session_gate:            # Session-end AI importance gate (notable_only ledger)
+  enabled: true
+  provider: "auto"       # Google first when key exists, else Grok
+  base_url: "https://api.x.ai/v1"
+  model: "grok-4.3"
+  google_base_url: "https://generativelanguage.googleapis.com/v1beta"
+  google_model: "gemini-3.8-flash"
+  max_keyframes: 3
+  daily_call_cap: 80     # separate from video_metadata / live_vision caps
+  timeout_seconds: 20
+  ledger_policy: "notable_only"   # routine motion → DVR note only, no event row
+  fallback_when_offline: "heuristics"
+  known_resident_routine_bias: true
   secrets_file: "secrets.yaml"
 
 performance:

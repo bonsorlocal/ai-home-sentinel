@@ -1,0 +1,86 @@
+Build a single-page investor landing site for AI Home Sentinel. One route: /. Static content only. No login, no dashboard, no API calls, no Raspberry Pi connection, no database. A “Request a demo” button scrolls to a short form (name, email, note) that shows a confirmation state in the browser and does not pretend to send email unless a real form endpoint already exists. If it does not, use a mailto: link and say so in the form helper text.
+
+Audience: angel and technical investors who will also see a live demo. Goal: they understand what the product does, why it is different, what already runs, and what is not claimed. This is not a consumer checkout page and not a pitch deck with fake metrics.
+
+PRODUCT TRUTH (do not add capabilities):
+AI Home Sentinel is a home security camera that runs on a Raspberry Pi in one home (home beta). Pipeline: camera capture, motion, on-device YOLO detection, face recognition of known people, an event ledger, a reasoner that tiers events, then a dashboard. Optional cloud language model (Google Gemini first, Grok as fallback) for chat, a daily recap, and clip summaries. Cloud upload is a permission. Detection and the recording stay local.
+
+What an investor can see working:
+- Live camera and a dashboard with Home, Away, and Night modes
+- Motion sessions stored in an event ledger
+- On-device person/object detection
+- Known faces for household members, plus resident profiles with appearance notes (height, build, tattoos), not face-only identity
+- Owner enrollment in plain language, for example “I’m Jordan, make me the owner”
+- A reasoner that keeps routine events quiet and sends a phone push only for higher-tier moments: unknown face, a repeat unknown person, a person at night (ntfy, with a cooldown so the phone is not spammed)
+- Short clips and a local DVR the owner can review
+- Text or browser-voice questions such as “What happened last night?”
+- Token-protected dashboard, designed to run 24/7 as a home service
+
+Do not claim: revenue, users, waitlist size, market size, partnerships, awards, app stores, multiple customer homes, always-on wake word, phone calls, professional monitoring, guaranteed identity, or that the cloud stores the video. Wake word and telephony are future flags, not the product. Say “home beta” once, plainly.
+
+POSITIONING:
+Category: a local home camera with household memory and judgment.
+One-line: “A home camera that knows who belongs there.”
+Support: “It watches locally, remembers the household, and only interrupts you when the moment actually matters.”
+Do not use the words revolutionize, seamless, cutting-edge, next-gen, unlock, or empower. No exclamation points. Do not name Ring, Nest, Arlo, or ADT. Describe the old behavior instead: folders of motion clips, monthly fees for your own footage, and cameras that cannot tell a resident from a stranger.
+
+PAGE STRUCTURE, in this order:
+
+1. Nav. Wordmark “AI Home Sentinel”. Links: Problem, How it works, A night at home, What’s real. Right side: “Request a demo”. Sticky, minimal, dark.
+
+2. Hero. Eyebrow in small mono: HOME BETA. Headline: “A home camera that knows who belongs there.” Subcopy of two sentences: most cameras send motion. This one keeps a ledger of who was seen, decides whether it matters, and answers in plain language. Primary button “Request a demo”. Secondary text button “See how it decides”. No product screenshot required. A right-side specimen card is allowed: a fake phone push reading “Unknown person · front door · 11:42 pm” and under it a quiet line “Jordan arrived · 6:14 pm · no alert”. Label the card “Example, not a live feed”.
+
+3. Problem. Three short columns, no icons-from-a-pack clutter. Use simple words:
+- Noise. Motion is not meaning. A pet, a headlight, and a person at the door become the same notification.
+- Amnesia. The camera does not know who lives there, so every familiar face can look like an incident.
+- Rented footage. The recording and the judgment often live in someone else’s cloud, behind a subscription.
+Close the section with one sentence: the useful product is the decision, not another clip.
+
+4. How it works. A horizontal (stacked on mobile) sequence of six steps, each one short label plus one sentence:
+- See. The camera runs at home.
+- Notice. Motion opens a session. Stillness stays quiet.
+- Recognize. On-device detection and face match, plus appearance notes for the household.
+- Judge. A reasoner assigns a tier. Routine stays on the ledger. Unknown, repeat, or night person can reach the phone.
+- Remember. Clips and DVR stay local. The ledger is what the system can talk about.
+- Answer. Ask what happened at a given time, and you are given the option to read/hear footage description, or be provided a short clip with the footage in question.s optional.”
+
+5. A night at home. A short narrative, two beats, set in type — not a stock photo.
+Beat A: 11:42 pm, a person at the door the camera does not know. Night mode plus an unknown face is enough to send one push. The owner can open the clip.
+Beat B: 6:14 pm, a known resident. The event is stored. The phone stays quiet.
+Then a sample exchange in a monospace panel:
+Owner: What happened last night?
+Sentinel: One unknown person at the front door at 11:42 pm. No one else after that. Jordan arrived earlier, at 6:14 pm.
+Caption: “Illustrative answer. Live answers come from the event ledger during a demo.”
+
+6. What you would see in the demo. Six items, one line each: live view, Home/Away/Night, an event with a tier, a known person versus an unknown, the local DVR, and a spoken or typed question. This is an invitation to the real system, not a second product tour.
+
+7. What’s real. Two columns.
+Running in the home beta: the pipeline above, phone pushes for tier-2 events, local DVR and clips, household profiles, plain-language enrollment, dashboard chat and browser voice, optional Gemini/Grok recap.
+Not claimed: customers, revenue, multi-home service, always-listening wake word, phone-call alerts, professional monitoring, identity guarantees.
+Add one honest constraint: it is one home, one Pi, and a founder-operated beta. The point of the page is to make the system legible before the live demo.
+
+8. Close. Headline: “See it decide.” Three sentences: the demo is the product running at home, on the same pipeline as the page described. No slide replaces the camera, the ledger, and a question asked out loud. Button repeats “Request a demo”.
+
+9. Demo form. Fields: name, email, “What do you want to see?”. Submit shows “Request noted on this device” plus the mailto fallback. Footer: product name, “Home beta”, no social icons, no legal fiction. A single privacy line: this page stores nothing unless they use their own email app.
+
+DESIGN:
+- Background #09090B, text #FAFAFA, muted #A1A1AA, borders #27272A.
+- Blue #007AFF only for the primary button, focus rings, and the “no alert” quiet state.
+- Red #FF3B30 only on the unknown-person example.
+- No gradients, no glassmorphism, no purple, no 3D, no stock photography, no burglar imagery, no smiling families, no shield logos, no animated particles.
+- Headlines: tight tracking, heavy weight, sentence case. Section labels: 11px mono, uppercase, letterspacing wide, color #71717A.
+- Max width about 1120px. Generous vertical space. Mobile first: the six steps stack; the hero card sits under the copy; buttons are full width under 640px.
+- One typeface pair if available: a grotesk for headlines (Geist, Inter, or system-ui) and a mono for labels (Geist Mono, ui-monospace).
+- Motion: almost none. A 150ms color change on buttons is enough. Do not animate the fake phone alert into view on a loop.
+
+COPY RULES:
+- Write every sentence yourself from the facts above. Do not invent quotes, metrics, testimonials, customer logos, or press.
+- Prefer “the system” and “the household” over “users”.
+- Second person is allowed in the night story (“your phone”). Everywhere else, describe the product.
+- If a sentence could apply to any AI startup, delete it.
+
+ACCEPTANCE:
+- A stranger can explain the product after one scroll: local camera, household memory, tiered alerts, you can ask what happened.
+- No false claim from the banned list appears anywhere, including button text, alt text, and the form thank-you.
+- The page is usable at 375px and at 1280px.
+- Lighthouse-level basics: one h1, landmarks, contrast on muted text at least AA, buttons are real buttons or links, form fields have labels.

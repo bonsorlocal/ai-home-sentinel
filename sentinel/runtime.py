@@ -28,6 +28,7 @@ from sentinel.notifier import Notifier
 from sentinel.pi_bridge import PiBridge
 from sentinel.reasoner import Reasoner
 from sentinel.resource_guard import ResourceGuard
+from sentinel.session_gate import SessionGate
 from sentinel.storage import ClipStorage, SnapshotStorage
 from sentinel.telephony import TelephonyBridge
 from sentinel.voice_out import CameraVoice
@@ -133,6 +134,7 @@ class SentinelRuntime:
         )
         self.reasoner = Reasoner(config)
         self.notifier = Notifier(config)
+        self.session_gate = SessionGate(config)
         self.clip_metadata = ClipMetadataWorker(config, self.ledger)
         self.google = GoogleCloudServices(config)
         synthesize = None
@@ -205,6 +207,7 @@ class SentinelRuntime:
             },
             "dvr": self.dvr.status(),
             "video_metadata": self.clip_metadata.status(),
+            "session_gate": self.session_gate.status(),
             "google": self.google.status(),
             "live_vision": self.live_vision.status(),
             "resource_guard": self.resource_guard.status(),
@@ -253,7 +256,7 @@ class SentinelRuntime:
                 pass
 
     def _on_cloud_scene(self, scene: Dict[str, Any], frame) -> None:
-        """Interim tier-2 path when live cloud vision sees a door visitor."""
+        """Interim door escalate: phone notify now; ledger waits for session-end."""
         session = self._active_session
         if session is None or bool(session.get("closed")):
             return
@@ -262,7 +265,7 @@ class SentinelRuntime:
         visitor = bool(scene.get("visitor_at_door", False))
         if not visitor and activity not in ("knocking", "waiting", "delivering"):
             return
-        # Avoid spamming interim events for the same session.
+        # Avoid spamming interim notifies for the same session.
         if session.get("interim_notified"):
             return
 
@@ -292,19 +295,38 @@ class SentinelRuntime:
         snapshot_path = None
         if frame is not None and self._save_on_tier2:
             snapshot_path = self.storage.save_snapshot(frame, prefix="door")
+            session["snapshot_path"] = snapshot_path
 
-        record = self._insert_event(
+        # Under notable_only: notify immediately but defer ledger insert to session end
+        # so the event list does not double-count door + session.
+        session["interim_door"] = {
+            "title": title,
+            "summary": summary,
+            "tier": tier,
+            "importance": importance,
+            "entities": entities,
+        }
+        provisional = EventRecord(
+            id=0,
+            timestamp=now_iso(),
             source="system",
-            title=title,
-            summary=summary,
             tier=tier,
             importance=importance,
+            title=title,
+            summary=summary,
             entities=entities,
             snapshot_path=snapshot_path,
+            clip_path=None,
+            acknowledged=False,
+            notified=False,
         )
-        session["interim_notified"] = True
-        self._last_interim_notify_at = time.monotonic()
-        self._annotate_dvr_from_event(record)
+        if self.notifier.notify(provisional):
+            session["interim_notified"] = True
+            self._last_interim_notify_at = time.monotonic()
+        else:
+            # Still mark so we don't retry spam even if notify is offline.
+            session["interim_notified"] = True
+            self._last_interim_notify_at = time.monotonic()
 
     def _insert_event(self, **kwargs: Any) -> EventRecord:
         """Insert one session event and send downstream updates."""
@@ -324,10 +346,14 @@ class SentinelRuntime:
                 )
                 kwargs["tier"] = tier
                 kwargs["importance"] = importance
+        already_interim = bool(session and session.get("interim_notified"))
         record = self.ledger.insert(**kwargs)
         if record.clip_path:
             self.clip_metadata.enqueue(record.id, record.clip_path)
-        if self.notifier.notify(record):
+        # Door interim already pushed a phone alert; do not double-notify on session close.
+        if already_interim:
+            self.ledger.mark_notified(record.id)
+        elif self.notifier.notify(record):
             self.ledger.mark_notified(record.id)
         self.pi_bridge.on_event(record)
         return record
@@ -339,6 +365,32 @@ class SentinelRuntime:
             return [frames[-1]]
         step = (len(frames) - 1) / (max_frames - 1)
         return [frames[int(round(i * step))] for i in range(max_frames)]
+
+    def _session_keyframes(self, session: Dict[str, Any], max_frames: int = 3) -> List[bytes]:
+        """JPEG-encode a few frames from the session buffer for the AI gate."""
+        frames = list(session.get("clip_frames") or [])
+        if not frames:
+            last = session.get("last_frame")
+            if last is not None:
+                frames = [last]
+        if not frames:
+            return []
+        sampled = self._downsample_clip_frames(frames, max(1, int(max_frames)))
+        encoded: List[bytes] = []
+        try:
+            import cv2  # type: ignore
+        except Exception:  # noqa: BLE001
+            return []
+        for frame in sampled:
+            if frame is None:
+                continue
+            try:
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                if ok:
+                    encoded.append(buf.tobytes())
+            except Exception:  # noqa: BLE001
+                continue
+        return encoded
 
     def _resize_clip_frame(self, frame):
         if frame is None:
@@ -597,9 +649,19 @@ class SentinelRuntime:
         has_person = "person" in labels or bool(known_faces) or unknown_faces > 0
         peak_area = float(session.get("peak_area", 0.0))
         recent = self.ledger.list_recent(limit=20)
+        # Door interim from live_vision promotes hard safety before soft AI.
+        if session.get("cloud_scene") and "cloud_scene" not in entities:
+            entities["cloud_scene"] = dict(session["cloud_scene"])
         tier, importance = self.reasoner.classify(source, entities, recent)
+        interim_door = session.get("interim_door") if isinstance(session.get("interim_door"), dict) else None
+        if interim_door and int(interim_door.get("tier", 0) or 0) >= 2:
+            tier = max(tier, int(interim_door.get("tier", 2)))
+            importance = max(float(importance), float(interim_door.get("importance", 0.85) or 0.85))
+            title = str(interim_door.get("title") or title)
+            summary = str(interim_door.get("summary") or summary)
+            source = "system"
 
-        save_clip, skip_reason = self._should_save_clip(
+        heuristic_save, skip_reason = self._should_save_clip(
             source=source,
             labels=labels,
             duration=duration,
@@ -607,6 +669,55 @@ class SentinelRuntime:
             tier=tier,
             has_person=has_person,
         )
+        gate_cfg = self._config.get("session_gate") or {}
+        max_kf = max(1, int(gate_cfg.get("max_keyframes", 3)))
+        keyframes = self._session_keyframes(session, max_frames=max_kf)
+
+        decision = self.session_gate.decide(
+            entities=entities,
+            tier=tier,
+            source=source,
+            keyframes=keyframes,
+            heuristic_save_clip=heuristic_save,
+        )
+        entities["session_gate"] = {
+            "importance": decision.importance,
+            "reason": decision.reason,
+            "source": decision.source,
+            "save_clip": decision.save_clip,
+            "ledger": decision.ledger,
+        }
+        if decision.subjects:
+            entities["gate_subjects"] = decision.subjects
+        if decision.activities:
+            entities["gate_activities"] = decision.activities
+        if decision.appearance_notes:
+            entities["appearance_notes"] = decision.appearance_notes
+
+        # Routine: quiet DVR note only — no ledger row, no Ring-style clip.
+        if not decision.keep_event:
+            start_ts = str(session.get("started_at") or now_iso())
+            end_ts = str(session.get("last_update_at") or now_iso())
+            note = decision.dvr_context or summary
+            try:
+                self.dvr.add_context_note(
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    text=note,
+                    importance=decision.importance,
+                    subjects=decision.subjects or known_faces,
+                    appearance_notes=decision.appearance_notes,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._active_session = None
+            return
+
+        save_clip = bool(decision.save_clip) and self._clips_enabled
+        if decision.source == "disabled":
+            save_clip = bool(heuristic_save)
+        if not save_clip and not heuristic_save:
+            skip_reason = skip_reason or decision.reason or "session gate skipped clip"
 
         clip_prefix = "person" if "person" in labels else source
         clip_frame = frame if frame is not None else session.get("last_frame")
@@ -638,6 +749,11 @@ class SentinelRuntime:
         if snapshot_path is None and tier >= 2 and self._save_on_tier2 and frame is not None:
             snap_prefix = "person" if "person" in labels else source
             snapshot_path = self.storage.save_snapshot(frame, prefix=snap_prefix)
+
+        # Promote importance for urgent gate decisions.
+        if decision.importance == "urgent":
+            importance = max(float(importance), 0.85)
+            tier = max(int(tier), 2)
 
         record = self._insert_event(
             source=source,
